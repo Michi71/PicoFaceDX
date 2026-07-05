@@ -1,0 +1,40 @@
+#ifndef DX_CONTROLLER_H
+#define DX_CONTROLLER_H
+
+#include "DX_Synth_Bridge.h"
+
+// ---------------------------------------------------------------------------
+// Menu page enumeration. One page per logical control context.
+// Order matters: OP1..OP4 index directly into patch.ops[page].
+// ---------------------------------------------------------------------------
+enum class DxPage : uint8_t { OP1 = 0, OP2, OP3, OP4, LFO, ALGO, COUNT };
+
+// Architektur-Hinweis:
+// Diese Klasse ist sicher fuer Core 1. Parameteraenderungen durch Encoder2/3
+// werden ueber IPC (ipc_send_dx_param) an Core 0 gesendet, welche den Patch mutiert.
+// MIDI-Notenweiterleitung an die DX-Engine passiert nicht mehr hier, sondern direkt
+// in RefaceMidi (inkl. Kanal-Filter/Transpose/Soft-Pedal-Logik).
+class DX_Controller {
+public:
+    explicit DX_Controller(DX_Synth_Bridge& bridge)
+        : bridge_(bridge), page_(DxPage::OP1) {}
+
+    // --- Encoder handlers (implemented in .cpp) ----------------------------
+    void onEncoder1(int delta);
+    void onEncoder2(int delta);
+    void onEncoder3(int delta);
+
+    // --- Accessors ---------------------------------------------------------
+    DxPage currentPage() const { return page_; }
+    RDX_Patch& patch() const { return bridge_.patch(); }
+    const char* pageName() const;
+
+private:
+    DX_Synth_Bridge& bridge_;
+    DxPage          page_;
+
+    // Helper: advance page index with bidirectional wraparound.
+    static DxPage advancePage(DxPage current, int delta);
+};
+
+#endif // DX_CONTROLLER_H

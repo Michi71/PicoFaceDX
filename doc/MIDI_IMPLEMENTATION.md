@@ -1,234 +1,228 @@
-# PicoFaceCP — MIDI Implementation
+# PicoFaceDX — MIDI Implementation
 
-Äquivalent zur MIDI-Implementierung des **Yamaha reface CP**
-(Quelle: *reface Data List*, `lchjs0-reface_en_dl_b0.pdf`, Seiten 11–14).
-Implementiert in `include/midi_reface.h` / `src/midi_reface.cpp` (Protokollschicht, Core 1)
-und `include/midi_input_usb.h` / `src/midi_input_usb.cpp` (USB-MIDI-Transport).
+Version: 2.0
 
-Version: 1.0 · Stand: 2026-07-02
+Implementiert in `include/midi_reface.h` / `src/midi_reface.cpp` (Core 1) sowie `include/midi_input_usb.h` / `src/midi_input_usb.cpp` (USB-MIDI-Transport, TinyUSB, Cable 0, kein DIN-Port). Die alte reface-CP-MIDI-Schicht wurde vollständig entfernt; ausschließlich diese neue Spezifikation ist gültig.
 
----
+## 1 Coverage
 
-## 1. Coverage
+PicoFaceDX ist ein USB-MIDI-Tongenerator (Yamaha reface DX FM-Synth-Klon). Empfangen wird ausschließlich über USB-MIDI (Cable 0); ein DIN-Port existiert nicht. Gesendet werden Identity Reply, Bulk-Dump-Antworten, Parameter-Request-Antworten, Active Sensing sowie Program-Change-Nebenwirkungen (`txProgram`). Es gibt keine lokale Tastatur und keinen generischen Note-Off/Note-On-Sendeweg.
 
-Diese Spezifikation beschreibt Senden und Empfang von MIDI-Daten des PicoFaceCP
-über **USB MIDI** (TinyUSB Device, Cable 0). Ein DIN-MIDI-Port ist nicht bestückt.
+## 2 Compliance
 
-## 2. Compliance
+Voice-Messages werden gemäß Channel-Filter (SYSTEM RX-Kanal, Default All) empfangen. Note-Events werden transponiert (+SYSTEM Master Transpose, +UI-Oktave) und per IPC an `DX_Synth_Bridge::noteOn`/`noteOff` weitergereicht. Pitch Bend wird als roher 14-Bit-Wert per IPC übergeben; Core 0 wandelt ihn in einen zentrierten Signed-Wert um, bevor `RDX_Synth::updatePB` aufgerufen wird; der Bereich wird durch den Patch-Parameter `pbRange` gesteuert (algorithmus-/patchseitig, nicht fest ±2 Halbtöne). Aftertouch ist nicht implementiert (RX/TX beides x). Program Change deckt den vollen Adressbereich des echten reface DX ab (0–31, 32 Werkspresets, siehe Abschnitt 9).
 
-* MIDI 1.0 (über USB-MIDI-Class-Protokoll, 4-Byte-Event-Pakete)
-
-## 3. Transmit / Receive Data
+## 3 Transmit / Receive
 
 ### 3-1 Channel Voice Messages
 
-| Message | Status | RX | TX | Bemerkung |
+| Status | Funktion | TX | RX | Bemerkung |
 |---|---|---|---|---|
-| Note Off | `8nH` | ✓ | ✗ | Velocity ignoriert |
-| Note On / Off | `9nH` (v=0 → Off) | ✓ | ✗ | v = 1–127; kein lokales Keyboard, daher kein TX |
-| Control Change | `BnH` | ✓ | ✓ | Tabelle unten; TX nur Panel-CCs bei MIDI Control = on |
-| Pitch Bend | `EnH` | ✓ | ✗ | ±2 Halbtöne, wirkt auf alle aktiven Voices |
-| Program Change | `CnH` | ✓ | ✓ | **Abweichung:** PC 0–7 wählt Werkspreset (`doc/PRESETS.md`); Original hat kein PC |
-| Aftertouch (Key/Ch) | `AnH`/`DnH` | ✗ | ✗ | |
+| 8n / 9n v=0 | Note Off | x | o | Kanalgefiltert (SYSTEM RX), transponiert, IPC an `DX_Synth_Bridge::noteOff` |
+| 9n v>0 | Note On | x | o | Kanalgefiltert (SYSTEM RX), transponiert, IPC an `DX_Synth_Bridge::noteOn` |
+| Bn | Control Change | o* | o | *TX nur als Program-Change-Nebenwirkung (`txProgram`); kein generischer CC-TX (keine Frontpanel-FX-Kette). RX siehe 3-2 und 3-3 |
+| En | Pitch Bend | x | o | Roh 14-Bit per IPC; Core 0 wandelt in Signed; Bereich via Patch `pbRange` |
+| Cn | Program Change | o | o | 0–31, alle 32 realen Werkspresets (`DX_NPRESETS=32`, siehe `doc/PRESETS.md`). Wählt Preset via `preset_stage()`. Nicht durch MIDI-Control-Gate beschränkt, nur durch Kanal-Filter |
+| An / Dn | Aftertouch (Poly/Ch) | x | x | Nicht implementiert |
 
-Empfangskanal: SYSTEM-Parameter `MIDI receive channel` (1–16, All; Default **All**).
-Sendekanal: SYSTEM-Parameter `MIDI transmit channel` (Default 1).
+### 3-2 Control Change — Tier 1 (lokal auf Core 1, nicht an Engine weitergeleitet)
 
-#### Empfangene Controller (immer aktiv)
+| CC | Funktion | TX | RX | Bemerkung |
+|---|---|---|---|---|
+| 121 | Reset All Controllers | x | o | Setzt per IPC: Pitch Bend → Center, Modulation (CC1) → 0 (Minimum), Expression (CC11) → 127 (Maximum), Sustain (CC64) → off — exakt wie in der offiziellen Data List spezifiziert |
+| 124 | Omni Off | x | o | All Notes Off + RX-Kanal := 0 |
+| 125 | Omni On | x | o | All Notes Off + RX-Kanal := All (0x10) |
 
-| CC | Funktion | Umsetzung im PicoFaceCP |
-|---|---|---|
-| 1 | Modulation | FX-Tremolo-Depth (hörbar bei Trem/Wah-Modus ≠ Off) |
-| 7 | Volume | Master-Volume der FX-Kette |
-| 11 | Expression | Multiplikativ auf Master-Volume (`RefaceCpChain::setExpression`) |
-| 64 | Sustain | Engine-Sustain (`mdaEPiano`, CC 0x40) |
-| 66 | Sostenuto | wie Sustain (Näherung der Engine) |
-| 67 | Soft Pedal | Note-On-Velocity × 0,75 solange gedrückt |
+**CC66 (Sostenuto) und CC67 (Soft Pedal) existieren auf dem echten reface DX nicht** (nur reface CP hat sie) und werden daher bewusst nicht behandelt — sie fallen durch zu Tier 2 und werden ignoriert, da `RDX_Synth::processCC` dafür keinen Fall kennt. Eine frühere Version dieser Firmware übernahm eine CC67-Soft-Pedal-Behandlung aus der (mittlerweile entfernten) reface-CP-Schicht; das war eine Spezifikationsabweichung und wurde entfernt.
 
-#### Empfangene/gesendete Controller (nur bei MIDI Control = on)
+### 3-3 Control Change — Tier 2 (per IPC unverändert an Core 0 `DX_Synth_Bridge::processCC` → `RDX_Synth::processCC` weitergeleitet)
 
-Identisch zur reface-CP-Tabelle (Data List S. 13):
+| CC | Funktion | TX | RX | Bemerkung |
+|---|---|---|---|---|
+| 0 / 32 | Bank Select MSB / LSB | x | o | Akzeptiert, aktuell ungenutzt (alle 32 Presets sind über Program Change 0-31 allein adressierbar, kein Bank-Umschalten nötig) |
+| 1 | Mod Wheel | x | o | |
+| 5 | Portamento Time | x | o | |
+| 7 | Main Volume | x | o | Berechnet Ausgangsverstärkung neu |
+| 11 | Expression | x | o | Multiplikativ mit Main Volume; berechnet Ausgangsverstärkung neu (wie bei CC7) |
+| 64 | Sustain | x | o | Korrekte Note-Off-if-not-held-Logik beim Loslassen |
+| 65 | Portamento On/Off | x | o | |
+| 80 *1 | Algorithm Quick-Select | x | o | 0–127 skaliert auf 0–11 |
+| 85 *1 | Op1 Output Level | x | o | |
+| 86 *1 | Op1 Feedback | x | o | |
+| 87 *1 | Op1 Feedback Type | x | o | |
+| 88 *1 | Op1 Freq Mode | x | o | |
+| 89 *1 | Op1 Freq Coarse | x | o | |
+| 90 *1 | Op1 Freq Fine | x | o | |
+| 102–107 *1 | Op2: dieselben 6 Parameter | x | o | Entsprechend CC85–90 für Operator 2 |
+| 108–113 *1 | Op3: dieselben 6 Parameter | x | o | Entsprechend CC85–90 für Operator 3 |
+| 114–119 *1 | Op4: dieselben 6 Parameter | x | o | Entsprechend CC85–90 für Operator 4 |
+| 120 | All Sound Off | x | o | |
+| 123 | All Notes Off | x | o | |
 
-| CC | Name | Wertebereiche (RX) | TX-Werte |
+*1: Nur empfangen (und übertragen), wenn SYSTEM „MIDI Control" (Adresse `0E`) eingeschaltet ist — exakt wie beim echten reface DX spezifiziert. Alle übrigen Tier-2-CCs sind davon unabhängig stets aktiv.
+
+
+### 3-4 Channel Mode Messages
+
+Siehe Tier 1 (CC124 Omni Off, CC125 Omni On) sowie CC120 All Sound Off, CC123 All Notes Off, CC121 Reset All Controllers. Omni Off setzt RX-Kanal auf 0, Omni On setzt RX-Kanal auf All (0x10); beide lösen zusätzlich All Notes Off aus.
+
+## 4 SYSTEM-Parametertabelle
+
+Basisadresse `00 00 00`, 32 Bytes gesamt (spiegelt `RDX_System` aus `dx_engine` bytefürbyte).
+
+| Adresse | Größe | Feld | Wertebereich / Bemerkung |
 |---|---|---|---|
-| 80 | TYPE | 0–21 Rd I · 22–42 Rd II · 43–64 Wr · 65–85 Clv · 86–106 Toy(=Pno) · 107–127 CP | 0 / 25 / 51 / 76 / 102 / 127 |
-| 81 | DRIVE | 0–127 | 0–127 |
-| 17 | TREMOLO/WAH SWITCH | 0–42 Off · 43–85 Tremolo · 86–127 Wah | 0 / 64 / 127 |
-| 18 | TREMOLO/WAH DEPTH | 0–127 | 0–127 |
-| 19 | TREMOLO/WAH RATE | 0–127 | 0–127 |
-| 85 | CHORUS/PHASER SWITCH | 0–42 Off · 43–85 Chorus · 86–127 Phaser | 0 / 64 / 127 |
-| 86 | CHORUS/PHASER DEPTH | 0–127 | 0–127 |
-| 87 | CHORUS/PHASER SPEED | 0–127 | 0–127 |
-| 88 | D.DELAY/A.DELAY SWITCH | 0–42 Off · 43–85 D.Delay · 86–127 A.Delay | 0 / 64 / 127 |
-| 89 | DELAY DEPTH | 0–127 | 0–127 |
-| 90 | DELAY TIME | 0–127 | 0–127 |
-| 91 | REVERB DEPTH | 0–127 | 0–127 |
+| 00 | 1 | TX MIDI Channel | 0–0F |
+| 01 | 1 | RX MIDI Channel | 0–0F; 10 = All |
+| 02–05 | 4 | Master Tune | 4 Nibbles (`SYS_TUNE_0..3`), zu 16-Bit-Rohwert rekombiniert (`(t0<<12)\|(t1<<8)\|(t2<<4)\|t3`), dekodiert zu Cent (`(raw-1024)*0.1`, geklemmt auf ±102,4/±102,3 Cent) und per eigenem IPC-Befehl (`IPC_CMD_DX_MASTER_TUNE`) additiv zum Pitch Bend auf alle Operatoren angewandt (Phase D, siehe `doc/CHANGELOG_DX_ENGINE.md` §16) |
+| 06 | 1 | Local Control | 0/1; keine lokale Tastatur, nur gespeichert |
+| 07 | 1 | Master Transpose | 0x34–0x4C = −12…+12 Halbtöne; auf eingehende Noten angewandt |
+| 08–09 | 2 | Tempo | Gespeichert, nicht verbraucht |
+| 0A | 1 | LCD Contrast | Gespeichert, nicht verbraucht (kein LCD) |
+| 0B | 1 | Pedal Model | Gespeichert, nicht verbraucht |
+| 0C | 1 | Auto Power Off | 0/1, gespeichert |
+| 0D | 1 | Speaker On | 0/1, gespeichert |
+| 0E | 1 | MIDI Control | 0/1, gespeichert; gated CC80/85-90/102-119 (siehe 3-3, *1) |
+| 0F–1F | 17 | reserviert | Gespeichert |
 
-TX erfolgt bei Änderung am (virtuellen) Frontpanel (`pico_frontpanel.cpp` →
-`fp_send_*`-Wrapper → `RefaceMidi::txFxParam/txFxMode/txInstrument`) bzw. bei
-Preset-Wahl im Menü (`RefaceMidi::txProgram` → Program Change 0–7, siehe
-Abweichung 7).
+## 5 Common-Parametertabelle
 
-### 3-2 Channel Mode Messages (RX)
+Basisadresse `30 00 00`, 38 Bytes gesamt (spiegelt `RDX_Common`).
 
-| CC | Funktion | Verhalten |
+| Offset | Größe | Feld |
 |---|---|---|
-| 120 | All Sound Off | alle Voices sofort stumm (`resetVoices`) |
-| 121 | Reset All Controllers | Pitch Bend center, Expression max, Sustain/Sostenuto/Soft off, Engine-Controller-Reset |
-| 123 | All Notes Off | Release läuft aus; Sustain wird respektiert (`stopVoices`) |
-| 124 | Omni Mode Off | wie All Notes Off; Empfangskanal := 1 |
-| 125 | Omni Mode On | wie All Notes Off; Empfangskanal := All |
-| 126 | Mono | wie All Sound Off; Polyphonie = 1 |
-| 127 | Poly | wie All Sound Off; Polyphonie = max |
+| 00–09 | 10 | voiceName |
+| 0A–0B | 2 | reserved1 |
+| 0C | 1 | transpose |
+| 0D | 1 | monoPoly |
+| 0E | 1 | portaTime |
+| 0F | 1 | pbRange |
+| 10 | 1 | algorithm (0–11) |
+| 11 | 1 | lfoWave |
+| 12 | 1 | lfoSpeed |
+| 13 | 1 | lfoDelay |
+| 14 | 1 | lfoPMD |
+| 15–18 | 4 | pegRate |
+| 19–1C | 4 | pegLevel |
+| 1D–22 | 6 | effects (2×3): je Slot [Type, Param1, Param2] — Type 0–7 = Thru/Distortion/Touch Wah/Chorus/Flanger/Phaser/Delay/Reverb, verarbeitet post-mix von `DX_FXHost` (`include/dx_engine/DX_FXHost.h`); nur patch-/SysEx-adressierbar, keine dedizierte CC-Steuerung (bestätigt gegen die offizielle Data List) |
+| 23–25 | 3 | reserved2 |
 
-### 3-3 System Real Time Messages
+## 6 Operator-Parametertabelle
 
-**Active Sensing (`FEH`)**
-* TX: alle 200 ms (`RefaceMidi::tick()`, Core-1-Loop).
-* RX: Nach erstem `FEH` wird der Datenstrom überwacht; bleiben Daten länger als
-  ~350 ms aus, werden alle Noten/Sounds abgeschaltet und die Überwachung beendet.
+Basisadresse `31 <opNum 0–3> 00`, 28 Bytes pro Operator (spiegelt `RDX_OpParams`).
 
-### 3-4 System Exclusive Messages
+| Offset | Größe | Feld |
+|---|---|---|
+| 00 | 1 | enable |
+| 01–04 | 4 | egRate |
+| 05–08 | 4 | egLevel |
+| 09 | 1 | rateScaling |
+| 0A–0D | 4 | scaleLD / scaleRD / scaleLC / scaleRC |
+| 0E | 1 | lfoAMD |
+| 0F | 1 | lfoPMDEnable |
+| 10 | 1 | pegEnable |
+| 11 | 1 | velSens |
+| 12 | 1 | outLevel |
+| 13 | 1 | feedback |
+| 14 | 1 | fbType |
+| 15 | 1 | freqMode |
+| 16 | 1 | freqCoarse |
+| 17 | 1 | freqFine |
+| 18 | 1 | freqDetune |
+| 19–1B | 3 | reserved |
 
-Yamaha-Header wie beim reface CP: **Yamaha ID `43H`, Group `7FH 1CH`, Model ID `04H`** (reface CP).
-Die Device-Nummer `n` wird beim Empfang ignoriert; gesendet wird mit n=1 (`10H`) bzw. `00H` (Bulk).
+## 7 Bulk Dump Blöcke
 
-#### 3-4-1 Identity Request / Reply (Universal Non-Realtime)
+Yamaha-SysEx-Header: ID `43H`, Group `7F 1C`, Model ID `05H` (reface DX; die alte reface-CP-Schicht verwendete `04H`). Command-Nibble = Bits 4–6 des 3. Bytes (`d[2]&0x70`): `0x10` Parameter Change (RX), `0x00` Bulk Dump (RX), `0x20` Dump Request (RX→TX-Antwort), `0x30` Parameter Request (RX→TX-Antwort).
 
-* Request (RX): `F0 7E 0n 06 01 F7`
-* Reply (TX): `F0 7E 7F 06 02 43 00 41 52 06 00 00 00 7F F7` (identisch zum reface CP)
+### Identity Request / Reply
 
-#### 3-4-2 Parameter Change (RX)
+Identity Request (RX): `F0 7E 0n 06 01 F7`
+Identity Reply (TX): `F0 7E 7F 06 02 43 00 41 53 06 00 00 00 7F F7`
 
-`F0 43 1n 7F 1C 04 <AddrHigh> <AddrMid> <AddrLow> <Data…> F7`
-Bei Parametern mit Datengröße ≥ 2 (Master Tune) werden entsprechend viele Datenbytes übertragen.
+Hinweis: Model-ID-Bytes `41 53 06` (reface CP verwendete `41 52 06`; Byte 0x53 vs. 0x52 ist der einzige Unterschied, bestätigt gegen das echte reface DX und die ESP32-Referenzimplementierung `tools/refacedx/RDX-Reface-DX-emu/RDX/RDX_Midi.h`).
 
-#### 3-4-3 Bulk Dump (RX/TX)
+### Parameter Change (RX)
 
-`F0 43 0n 7F 1C <ByteCountHi> <ByteCountLo> 04 <Addr…> <Data…> <Checksum> F7`
-* Byte Count = Model ID + Adresse + Daten (ohne Checksumme).
-* Checksumme: Summe (Model ID + Adresse + Daten + Checksumme) ≡ 0 (untere 7 Bit).
-* Ungültige Checksumme ⇒ Block wird verworfen.
+`F0 43 1n 7F 1C 05 <AddrH> <AddrM> <AddrL> <Data> F7` — ein Byte pro Parameter; adressiert System/Common/Operator-Blöcke (siehe Tabellen in den Abschnitten 4–6).
 
-#### 3-4-4 Dump Request (RX)
+### Bulk Dump (RX/TX)
 
-`F0 43 2n 7F 1C 04 <Addr…> F7` — Antwort:
+`F0 43 0n 7F 1C <ByteCountHi> <ByteCountLo> 05 <AddrH> <AddrM> <AddrL> <Data...> <Checksum> F7`
 
-| Request-Adresse | Antwort |
+Byte Count = 1 (Model ID) + 3 (Adresse) + Datenlänge.
+Checksumme: Yamaha/Roland-Standard, `(128 - (sum & 0x7F)) & 0x7F` über ModelID+Addr+Data-Bytes; ungültige Checksumme → Block verworfen.
+
+RX schreibt in einen cross-core Staging-Patch (`include/dx_patch_stage.h`) statt direkt in die Live-Engine (Core 1 darf den Live-Patch nie direkt mutieren). Der Bulk-Footer-Block (Adresse `0F 0F xx`) löst `IPC_CMD_DX_PATCH_APPLY` aus, welches den Staging-Patch auf Core 0 in die Live-Engine kopiert. Der Bulk-Header-Block (Adresse `0E 0F xx`) initialisiert den Staging-Bereich zuerst mit dem AKTUELLEN Live-Patch, sodass ein partieller Dump (z. B. nur der Common-Block) keine unverwandten Operator-Daten mit veralteten Staging-Resten überschreibt.
+
+### Dump Request (RX) → TX-Antwort
+
+| Adresse | Antwort |
 |---|---|
-| `00 00 00` | SYSTEM Common (Byte Count 36) |
-| `0E 0F 00` | Bulk Header (4) + TG Common (`30 00 00`, 20) + Bulk Footer (4) |
-| `30 00 00` | TG Common einzeln (Erweiterung) |
+| `00 00 00` | Bulk: SYSTEM Common (32 Bytes) |
+| `0E 0F 00` | Bulk Header (0 Bytes) + Common-Block (`30 00 00`, 38 Bytes) + 4× Operator-Blöcke (`31 00 00`..`31 03 00`, je 28 Bytes) + Bulk Footer (0 Bytes) — vollständiger Patch-Dump |
+| `30 00 00` | nur Common-Block (38 Bytes) |
+| `31 <op> 00` | nur einzelner Operator-Block (28 Bytes) |
 
-#### 3-4-5 Parameter Request (RX)
+### Parameter Request (RX) → TX-Antwort
 
-`F0 43 3n 7F 1C 04 <Addr…> F7` — Antwort ist die entsprechende Parameter-Change-Message
-mit aktuellem Wert (live aus Engine/FX-Kette gelesen).
+Gleiche Adressierung wie Dump Request; Antwort ist jeweils das einzelne aktuelle Byte an dieser Adresse (Live-Lesezugriff aus der Engine; Core-1-Lesezugriff auf `DX_Synth_Bridge::patch()` ist eine akzeptierte Konvention in dieser Codebasis).
 
----
+### Bulk-Dump-Blockübersicht
 
-## 4. MIDI Parameter Change Table (SYSTEM), Basisadresse `00 00 00`
+| Block | Adresse | Bytes |
+|---|---|---|
+| SYSTEM Common | `00 00 00` | 32 |
+| Bulk Header | `0E 0F 00` | 0 |
+| Common | `30 00 00` | 38 |
+| Operator 0 | `31 00 00` | 28 |
+| Operator 1 | `31 01 00` | 28 |
+| Operator 2 | `31 02 00` | 28 |
+| Operator 3 | `31 03 00` | 28 |
+| Bulk Footer | `0F 0F xx` | 0 |
 
-| Addr | Size | Bereich | Parameter | Umsetzung |
-|---|---|---|---|---|
-| 00 | 1 | 00–0F | MIDI transmit channel | gespeichert, für CC/SysEx-TX |
-| 01 | 1 | 00–0F, 10 | MIDI receive channel (1–16, All) | Kanalfilter |
-| 02 | 4 | je Nibble | Master Tune (−102,4…+102,3 Cent, 0,1-Cent-Schritte, Center `0400H`) | auf Engine-Fine-Tune gemappt, **auf ±50 Cent begrenzt** (Engine-Bereich) |
-| 06 | 1 | 00–01 | Local Control | gespeichert (kein lokales Keyboard vorhanden) |
-| 07 | 1 | 34–4C | Master Transpose −12…+12 Halbtöne | auf Note-Ereignisse angewendet (zusätzlich zur UI-Oktave) |
-| 0B | 1 | 00–01 | Sustain Pedal Select (FC3/FC4-5) | gespeichert (Half-Damper nicht unterstützt) |
-| 0C | 1 | 00–01 | Auto Power-Off | gespeichert |
-| 0D | 1 | 00–01 | Speaker Output | gespeichert |
-| 0E | 1 | 00–01 | MIDI Control | schaltet CC 17–19/80/81/85–91 (RX+TX) |
-| übrige | 1 | — | reserved | gespeichert |
-
-Gesamtgröße Block: 32 Bytes (wie reface CP).
-
-## 5. MIDI Parameter Change Table (Tone Generator), Basisadresse `30 00 00`
-
-| Addr | Bereich | Parameter | Ziel |
-|---|---|---|---|
-| 00 | 00–7F | Volume | FX-Kette Master-Volume |
-| 01 | — | reserved | — |
-| 02 | 00–05 | Wave Type (Rd I, Rd II, Wr, Clv, Toy→Pno, CP) | `mdaEPiano::setInstrument` |
-| 03 | 00–7F | Drive | FX Drive |
-| 04 | 00–02 | Effect 1 Type (thru/Tremolo/Wah) | FX Trem/Wah-Modus |
-| 05 | 00–7F | Effect 1 Depth | FX Trem/Wah Depth |
-| 06 | 00–7F | Effect 1 Rate | FX Trem/Wah Rate |
-| 07 | 00–02 | Effect 2 Type (thru/Chorus/Phaser) | FX Cho/Pha-Modus |
-| 08 | 00–7F | Effect 2 Depth | FX Cho/Pha Depth |
-| 09 | 00–7F | Effect 2 Speed | FX Cho/Pha Speed |
-| 0A | 00–02 | Effect 3 Type (thru/D.Delay/A.Delay) | FX Delay-Modus |
-| 0B | 00–7F | Effect 3 Depth | FX Delay Depth |
-| 0C | 00–7F | Effect 3 Time | FX Delay Time |
-| 0D | 00–7F | Reverb Depth | FX Reverb |
-| 0E | 2 | reserved | — |
-
-Gesamtgröße Block: 16 Bytes. Lesezugriffe (Parameter Request / Dump) liefern
-Live-Werte aus `RefaceCpChain`-Gettern bzw. `mdaEPiano::getCurrentInstrument()`.
-
-## 6. Bulk Dump Blocks
-
-| Block | Beschreibung | Byte Count (dec/hex) | Top-Adresse |
-|---|---|---|---|
-| SYSTEM | Common | 36 / 24H | `00 00 00` |
-| TG | Bulk Header | 4 / 04H | `0E 0F 00` |
-| TG | Common | 20 / 14H | `30 00 00` |
-| TG | Bulk Footer | 4 / 04H | `0F 0F 00` |
-
-## 7. MIDI Implementation Chart
+## 8 MIDI Implementation Chart
 
 ```
-PicoFaceCP                    MIDI Implementation Chart        Version: 1.0
-Model: PicoFaceCP (reface CP kompatibel)                       Datum: 2026-07-02
+PicoFaceDX — MIDI Implementation Chart
+Model: PicoFaceDX (reface DX clone)        Version: 2.0
 
-Function...        Transmitted        Recognized       Remarks
-Basic   Default    1                  All (1-16)
-Channel Changed    1-16 (SysEx)       1-16, All (SysEx)
-Mode    Default    3                  1
-        Messages   x                  1,3 (CC 124-127)
-Note Number        x                  0-127            Transpose ±12 + Oktave ±24
-Velocity  NoteOn   x                  o v=1-127
-          NoteOff  x                  x
-After Touch        x                  x
-Pitch Bend         x                  o                ±2 Halbtöne
-Control    1,7,11  x                  o                Mod->Trem-Depth, Vol, Expr
-Change     64,66,67 x                 o                Sustain, Sostenuto, Soft
-           17-19   o *1               o *1
-           80,81   o *1               o *1
-           85-91   o *1               o *1
-Program Change     o (0-7)            o (0-7)          Werkspresets (Abweichung)
-System Exclusive   o                  o                Param Change/Request,
-                                                       Bulk Dump/Request, Identity
-System Common      x                  x
-System Real Time   o (FE)             o (FE)           Active Sensing 200ms/350ms
-Aux: All Sound Off x                  o (120,126,127)
-     Reset All Ctrl x                 o (121)
-     Local On/Off  x                  o (SysEx, gespeichert)
-     All Notes Off x                  o (123-125)
-     Active Sense  o                  o
-     Reset         x                  x
-
-*1: Gesendet und erkannt nur bei MIDI Control = on (SYSTEM-Param 0E).
-Mode 1: OMNI ON, POLY   Mode 3: OMNI OFF, POLY   o: Yes  x: No
++-----------------------------+----+----+-------------------------------------------+
+| Function                    | TX | RX | Remarks                                   |
++-----------------------------+----+----+-------------------------------------------+
+| Basic Channel               |  o |  o | 1–16 (SYSTEM TX/RX channel)              |
+| Mode                        |  3 |  3 | Mode 3: OMNI OFF / POLY                   |
+| Note Number                 |  x |  o | RX only; transposed (master+UI); IPC      |
+| Velocity                    |  x |  o | RX note on v>0                            |
+| After Touch                 |  x |  x | Not implemented                           |
+| Pitch Bend                  |  x |  o | 14-bit raw via IPC; range = patch pbRange |
+| Control Change              |  o*|  o | *TX only PC side-effect; Tier1: CC121/    |
+|                             |    |    | 124/125 local; Tier2: CC0/32/1/5/7/11/64/ |
+|                             |    |    | 65/120/123 always on, CC80/85-90/102-119  |
+|                             |    |    | gated by MIDI Control (real spec)         |
+| Program Change               |  o |  o | 0-31, all 32 real factory voices          |
+| System Exclusive             |  o |  o | Yamaha ID 43H, Group 7F 1C, Model 05H;    |
+|                             |    |    | Param Change/Bulk/Dump Req/Param Req;     |
+|                             |    |    | Identity Reply 41 53 06                    |
+| System Common                |  x |  x | Not implemented                           |
+| System Real Time             |  o |  o | Active Sensing FE: TX 200ms; RX 350ms      |
+|                             |    |    | timeout -> All Sound Off + All Notes Off   |
+| Aux: All Sound Off           |  x |  o | CC120                                     |
+| Aux: Reset All Controllers   |  x |  o | CC121 (local)                             |
+| Aux: Local On/Off             |  x |  o | SYSTEM byte stored; no local keyboard     |
+| Aux: All Notes Off            |  x |  o | CC123; CC124/125 also trigger             |
+| Aux: Active Sense              |  o |  o | See System Real Time                      |
+| Aux: Reset                    |  x |  x | Not implemented                           |
+| Notes                        |    |    | Mode 1: OMNI ON/POLY; Mode 3: OMNI OFF/    |
+|                             |    |    | POLY. 'o'=Yes, 'x'=No. No DIN port; USB-   |
+|                             |    |    | MIDI Cable 0 only. Front-panel FX1/FX2    |
+|                             |    |    | pages. MIDI Control gate active.          |
++-----------------------------+----+----+-------------------------------------------+
 ```
 
-## 8. Bewusste Abweichungen zum Original
+## 9 Deviations
 
-1. **Kein Note-TX / kein lokales Keyboard** — PicoFaceCP ist ein Tongenerator;
-   Local Control und Notensendung entfallen (Parameter wird akzeptiert/gespeichert).
-2. **Master Tune** wird auf den Fine-Tune-Bereich der mdaEPiano-Engine begrenzt (±50 Cent statt ±102,4).
-3. **CC 1 (Modulation)** steuert die FX-Tremolo-Depth (Designentscheidung der
-   Parameter-Deduplication; das Original moduliert Pan/Volume abhängig vom Voice-Typ —
-   klanglich äquivalent, da derselbe Tremolo-Block Pan- bzw. Volume-Modus je Voice-Typ wählt).
-4. **Sostenuto (CC 66)** wird von der Engine wie Sustain behandelt (Näherung).
-5. **Reset All Controllers** setzt die per Panel eingestellte Tremolo-Depth nicht zurück
-   (nur die Spielcontroller: Pitch Bend, Expression, Pedale).
-6. **Auto Power-Off / Speaker Output / Sustain Pedal Select** werden gespeichert und
-   im Bulk Dump geführt, haben aber keine Hardware-Funktion.
-7. **Program Change ist implementiert (Original: nicht vorhanden).** PC 0–7
-   wählt eines der 8 statischen Werkspresets (Instrument + Engine-Params +
-   FX-Kette, `doc/PRESETS.md`); Werte ≥ 8 werden ignoriert. TX bei Preset-Wahl
-   im Menü. Nicht durch die MIDI-Control-Einstellung gegated (eigene
-   Erweiterung, wie Noten nur durch den Empfangskanal gefiltert). CC 80 (TYPE)
-   behält die Original-Bedeutung (Instrumentwahl in 6 Zonen).
+1. **Keine lokale Tastatur / kein generischer Note-TX** — PicoFaceDX ist ein Tongenerator; Local Control wird akzeptiert/gespeichert, hat aber keine Wirkung.
+2. **Master Tune vollständig verdrahtet** (seit Phase D) — `tuningSemitones` wirkt additiv zum Pitch Bend auf alle Operatoren; siehe SYSTEM-Tabelle oben (Adresse 02–05) und `doc/CHANGELOG_DX_ENGINE.md` §16.
+3. **Program Change vollständig implementiert** — 0–31, alle 32 echten Werkspresets (Bank 1-4 à 8), byte-exakt aus den offiziellen `.syx`-Factory-Dumps geparst. Siehe `doc/PRESETS.md` für die vollständige Preset-Tabelle und die Provenienz der Konvertierung.
+4. **CC66 (Sostenuto) / CC67 (Soft Pedal) bewusst nicht implementiert** — beide existieren auf dem echten reface DX nicht (nur reface CP hat sie). Eine frühere Version dieser Firmware hatte eine CC67-Soft-Pedal-Behandlung aus der (mittlerweile entfernten) reface-CP-Schicht übernommen; das war eine Spezifikationsabweichung und wurde entfernt.

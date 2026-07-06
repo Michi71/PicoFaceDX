@@ -1,30 +1,28 @@
-/*
-  presets.h -- Static factory presets replacing the mda program layer.
-
-  Deviation from the original Yamaha Reface CP (which has no presets):
-  each preset bundles instrument + engine params + FX-chain settings and
-  is selected via CC80 zones (8 equal zones) or the PRESETS menu.
-*/
+// include/presets.h
+//
+// Built-in DX preset table: the 32 real Yamaha reface DX factory-bank
+// voices (Program Change 0-31, Bank1-1..8/Bank2-1..8/Bank3-1..8/Bank4-1..8,
+// confirmed against the official Yamaha Data List), parsed byte-exact from
+// the official .syx factory dumps shipped with the ESP32 reference project
+// this codebase's FM engine was ported from
+// (tools/refacedx/RDX-Reface-DX-emu/RDX/data/patches/*.syx) via a one-time
+// host tool (see src/presets.cpp for provenance). Array order is deliberate
+// and matches the real Program Change mapping exactly -- do not reorder.
 #pragma once
-#include <stdint.h>
+#include "dx_engine/RDX_Types.h"
 
-class mdaEPiano;
-class RefaceCpChain;
+#define DX_NPRESETS 32
 
-#define CP_NPRESETS 8
-
-struct CpPreset {
-    const char* name;        // <= 15 chars, shown on 128px OLED
-    uint8_t instrument;      // 0..5 = Rd I, Rd II, Wr, Clv, Pno, CP
-    float engine[12];        // mdaEPiano params 0..11
-    uint8_t twMode;          // 0 Off, 1 Tremolo, 2 Wah
-    uint8_t cpMode;          // 0 Off, 1 Chorus, 2 Phaser
-    uint8_t dlyMode;         // 0 Off, 1 Digital, 2 Analog
-    float drive, twDepth, twRate, cpDepth, cpSpeed, dlyDepth, dlyTime, reverb; // all 0..1
+struct DxPreset {
+    const char* name;
+    RDX_Patch patch;
 };
 
-extern const CpPreset cpPresets[CP_NPRESETS];
+extern const DxPreset dxPresets[DX_NPRESETS];
 
-void preset_apply(uint8_t idx, mdaEPiano* ep, RefaceCpChain* fx); // Core 0 only (called from IPC dispatch)
-void preset_set_current(uint8_t idx); // Core-1-side UI tracking
+class DX_Synth_Bridge;
+
+void preset_apply(DX_Synth_Bridge* dx);   // Core 0 only: copies the staged patch (dx_patch_stage()) into dx->patch()
+void preset_stage(uint8_t idx);            // Core 1: stages dxPresets[idx].patch and sends IPC_CMD_DX_PATCH_APPLY
+void preset_set_current(uint8_t idx);      // Core-1-side UI tracking
 uint8_t preset_get_current(void);

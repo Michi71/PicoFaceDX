@@ -1,5 +1,12 @@
 # Änderungsprotokoll: MIDI-Implementierung + RP2350-Optimierung
 
+> **Archiviert / überholt:** Dieses Changelog beschreibt die reface-CP-MIDI-Schicht,
+> die im Zuge der DX-only-Bereinigung vollständig entfernt wurde. Die aktuell
+> gültige MIDI-Spezifikation (reface DX) steht in
+> [`doc/MIDI_IMPLEMENTATION.md`](MIDI_IMPLEMENTATION.md). Dieses Dokument bleibt
+> als historischer Kontext erhalten, warum `RefaceMidi` ursprünglich so aufgebaut
+> wurde.
+
 Datum: 2026-07-02 · Workflow: Architektur/Orchestrierung Claude, Codegenerierung `glm-5.2:cloud`
 Build verifiziert: `cmake --build build -j4` → FLASH 26,32 % / RAM 36,44 % (Release, keine neuen Warnungen)
 

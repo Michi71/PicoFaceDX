@@ -10,8 +10,8 @@
 class RDX_Operator {
 public:
     RDX_Operator(int idx)
-        : idx_(idx),
-          params_(RDX_State::getState().workingPatch.ops[idx]) {}
+        : params_(RDX_State::getState().workingPatch.ops[idx]),
+          idx_(idx) {}
 
     inline void setParams( int note, int vel, float baseHz) {
         setFrequency(baseHz);
@@ -41,7 +41,7 @@ public:
 
     inline void gate(bool on) { env_.gate(on); }
 
-    inline float __attribute__((always_inline, hot)) CP_HOT(compute)(float inputPhaseOffset, float phaseModSemitones = 0.f) {
+    inline float __attribute__((always_inline, hot)) RAM_HOT(compute)(float inputPhaseOffset, float phaseModSemitones = 0.f) {
         if (!params_.enable) return 0.f;
         if (params_.fbType && fbAcc_ < 0.f) fbAcc_ = -fbAcc_;
         fbFilter_ += fbLpCoef_ * (fbAcc_ - fbFilter_);
@@ -88,10 +88,10 @@ private:
     float phase_     = 0.0f; float phaseInc_  = 0.0f; float fbAcc_     = 0.0f;
     float outGain_   = 1.0f; float fbScale_   = 0.0f; bool  fbRectify_ = false;
 
-	inline float __attribute__((always_inline)) CP_HOT(linearScale)(float x) { return   x; }
-	inline float __attribute__((always_inline)) CP_HOT(expScale)(float x) { return   (1.0f - expf(-4.0f * x)); }
+	inline float __attribute__((always_inline)) RAM_HOT(linearScale)(float x) { return   x; }
+	inline float __attribute__((always_inline)) RAM_HOT(expScale)(float x) { return   (1.0f - expf(-4.0f * x)); }
 
-    inline float __attribute__((always_inline)) CP_HOT(calcScalingFactor)(uint8_t note, int8_t lDepth, RDX_ScaleCurve lCurve, int8_t rDepth, RDX_ScaleCurve rCurve) {
+    inline float __attribute__((always_inline)) RAM_HOT(calcScalingFactor)(uint8_t note, int8_t lDepth, RDX_ScaleCurve lCurve, int8_t rDepth, RDX_ScaleCurve rCurve) {
         constexpr int BP = 60;
         constexpr float LEFT_RANGE  = (float)BP;
         constexpr float RIGHT_RANGE = (float)(127-BP);
@@ -120,7 +120,7 @@ private:
         return fclamp(factor, 0.f, 2.f);
     }
 
-    inline float __attribute__((always_inline)) CP_HOT(velocityGain)(uint8_t vel, uint8_t sens, float max_out = 1.1f) {
+    inline float __attribute__((always_inline)) RAM_HOT(velocityGain)(uint8_t vel, uint8_t sens, float max_out = 1.1f) {
         float normSens = sens / 127.0f;
         float factor = (1.0f - normSens) + VELO_SENS[vel] * normSens;
         return max_out * factor;

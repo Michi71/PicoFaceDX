@@ -1,4 +1,5 @@
 #include "DX_GUI.h"
+#include "dx_engine/DX_FXHost.h"
 #include <cstdio>
 
 // Thin call-syntax adapters: ESP32 reference used display.method(...) on a
@@ -194,6 +195,29 @@ void dxDrawScreen(u8g2_t* u8g2, DX_Controller& controller) {
 
     if (controller.currentPage() == DxPage::ALGO) {
         drawAlgo(u8g2, 20, controller.patch().common.algorithm, 40, true);
+    } else if (controller.currentPage() == DxPage::FX1 || controller.currentPage() == DxPage::FX2) {
+        int slot = (controller.currentPage() == DxPage::FX1) ? 0 : 1;
+        int typeId = controller.patch().common.effects[slot][0];
+        if (typeId >= FX_COUNT) typeId = FX_THRU;
+        int param1 = controller.patch().common.effects[slot][1];
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Type: %s", FX_NAMES[typeId]);
+        u8g2_DrawStr(u8g2, 4, 40, buf);
+        snprintf(buf, sizeof(buf), "Param1: %d", param1);
+        u8g2_DrawStr(u8g2, 4, 54, buf);
+    } else if (controller.currentPage() == DxPage::OP1 || controller.currentPage() == DxPage::OP2 || controller.currentPage() == DxPage::OP3 || controller.currentPage() == DxPage::OP4) {
+        int opIdx = static_cast<int>(controller.currentPage());
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Freq: %d", controller.patch().ops[opIdx].freqCoarse);
+        u8g2_DrawStr(u8g2, 4, 40, buf);
+        snprintf(buf, sizeof(buf), "Level: %d", controller.patch().ops[opIdx].outLevel);
+        u8g2_DrawStr(u8g2, 4, 54, buf);
+    } else if (controller.currentPage() == DxPage::LFO) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Speed: %d", controller.patch().common.lfoSpeed);
+        u8g2_DrawStr(u8g2, 4, 40, buf);
+        snprintf(buf, sizeof(buf), "PMD: %d", controller.patch().common.lfoPMD);
+        u8g2_DrawStr(u8g2, 4, 54, buf);
     } else {
         u8g2_DrawStr(u8g2, 4, 40, "(values shown via encoders)");
     }

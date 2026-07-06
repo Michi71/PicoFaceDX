@@ -1,5 +1,5 @@
 #pragma once
-#include "cp_hot.h"
+#include "ram_hot.h"
 #include "RDX_Constants.h"
 #include "RDX_State.h"
 
@@ -22,12 +22,12 @@ public:
         gate_     = false; rising_   = true; k_ = 1.0f ; c_ = 0.0f;
     }
 
-    inline float __attribute__((always_inline, hot)) CP_HOT(processAEG)() {
+    inline float __attribute__((always_inline, hot)) RAM_HOT(processAEG)() {
         float v = processInternal();
         if (rising_) { return k_ * v + c_ ; } else { return rdxGain(v); }
     }
 
-    inline float __attribute__((always_inline, hot)) CP_HOT(processInternal)() {
+    inline float __attribute__((always_inline, hot)) RAM_HOT(processInternal)() {
         if (stage_ == Stage::IDLE) return currentL_;
         if (stage_ == Stage::SUSTAIN_STAGE) { if (!gate_) enterStage(Stage::RELEASE); return currentL_; }
         if ( rising_ ) {

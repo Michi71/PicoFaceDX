@@ -219,4 +219,464 @@ Die in Abschnitt 7 beschriebene fehlende IPC-Anbindung wurde in dieser Fortsetzu
   - **Fix:** Beide Enum-Werte in `RDX_Envelope.h` und `RDX_PEG.h` wurden von `SUSTAIN` zu `SUSTAIN_STAGE` umbenannt (7 Fundstellen insgesamt zwischen beiden Dateien: je 1 Enum-Deklaration + mehrere `Stage::SUSTAIN`-Verwendungen in `enterStage()`/`advanceStage()`/`stageTarget()`-Methoden). `mdaEPiano.h` selbst wurde nicht angefasst (bestehender, funktionierender CP-Code).
 - **Build-Verifizierung nach dem Fix:** `ninja` → 6/6 erfolgreich. FLASH 4.489.648 B / 16 MB = 26,76 % (vorher 26,74 %). RAM 241.048 B / 512 KB = 45,98 % (vorher 45,97 %, minimal durch die kleine `dxController`-Instanz). Keine neuen Compiler-Warnungen — alle verbleibenden Warnungen sind unverändert die bereits dokumentierten, aus dem ESP32-Original geerbten (misleading-indentation, reorder, sign-compare, das bekannte fast_floorf-Uninitialized-Problem).
 - **STATUS JETZT:** Die DX-Engine ist vollständig End-to-End erreichbar — sowohl per MIDI-Note (klingt sofort, additiv mit CP gemischt) als auch per Hardware-Encoder (Menüseiten-Navigation + Parameter-Editierung über das Hauptmenü 'DX Synth').
+
+---
+
+## 12. Nachtrag: Vollständige Entfernung der reface-CP-Engine (2026-07-06)
+
+**Ziel (Korrektur der ursprünglichen Aufgabenstellung):** Der Nutzer stellte klar,
+dass PicoFaceDX **ausschließlich** ein reface-DX-Klon werden soll; reface CP
+diente nur als Vorlage/Skelett für die Hardware-Anbindung (Pin-/Display-/
+Encoder-Init, USB-MIDI-Transport, virtuelles EEPROM, generische OLED-Dialoge).
+Die additive Zwei-Engine-Architektur aus Abschnitt 10/11 wurde daher rückgebaut.
+
+### Gelöscht (24 Dateien)
+- mdaEPiano-Engine + Instrumenten-Sample-Daten (14 Dateien, ≈8 MB):
+  `src/mdaEPiano.cpp`, `include/mdaEPiano.h`, `include/mdaEPianoData.h`,
+  `include/mdaEPianoInstruments.h`, `include/{CP,Clv,Pno,Rd_II,Wr}Data.h`,
+  `include/{CP,Clv,Pno,Rd_II,Wr}Keygroups.h`.
+- reface-CP-Effektkette + dadurch verwaiste generische DSP-Header (7 Dateien):
+  `effects/reface_cp_chain.h`, `reface_cp_fx.h`, `wahwah.h`, `cp_audio.h`,
+  `dsp_fastmath.h`, `dsp_lut.h`, `dsp_reverb.h`.
+- `src/pico_program_select.cpp` (mdaEPiano-Programmauswahl-Screen).
+- CP-only Host-Testharness (7 Dateien): `test/test.cpp`, `build.sh`,
+  `mdaepiano_test`, `cp_test.cpp`, `build_cp.sh`, `cp_test`, `test/README.md`
+  (`test/veeprom_test.*` bleibt — reine, engine-unabhängige Speichertests).
+- `include/arduino_compat.h` (nach der mdaEPiano-Entfernung ohne verbleibende
+  Konsumenten, per Grep verifiziert).
+
+### Neu geschrieben (DX-nativ statt CP-nativ)
+- **`include/ipc.h`:** alle CP-Kommandos/Enums (`FxParam`, `FxMode`,
+  `IPC_CMD_NOTE_ON/OFF/CC/FX_PARAM/FX_MODE/VOICE_PARAM/PROGRAM/INSTRUMENT/PITCH_BEND`)
+  entfernt. 4 neue DX-Kommandos ergänzt: `IPC_CMD_DX_PITCH_BEND`, `IPC_CMD_DX_CC`,
+  `IPC_CMD_DX_RAW_WRITE` (einzelnes Patch-Byte per SysEx-Parameteränderung, da
+  die 12 kuratierten `DxParamId`-Werte nicht das komplette Common/Operator-Layout
+  abdecken), `IPC_CMD_DX_PATCH_APPLY`.
+- **`include/dx_patch_stage.h`** (neu): Core-übergreifender Staging-Slot für
+  einen kompletten `RDX_Patch` (~66 Byte, zu groß fürs 32-Bit-FIFO-Wort) —
+  Core 1 beschreibt ihn (Presets, SysEx-Bulk-Dump), Core 0 übernimmt ihn nach
+  `IPC_CMD_DX_PATCH_APPLY`.
+- **`include/DX_Synth_Bridge.h`:** zwei neue schlanke Passthrough-Methoden
+  `processCC()`/`updatePB()`, die auf bereits vorhandene, ungenutzte
+  `RDX_Synth::processCC()`/`updatePB()`-Methoden verweisen (keine Änderung an
+  der Engine selbst — nur zwei zusätzliche Aufruf-Wrapper).
+- **`include/midi_reface.h` + `src/midi_reface.cpp`:** komplett neues,
+  reface-DX-natives MIDI/SysEx-Schema (Common-Block @ `30 00 00`, 38 Byte;
+  Operator-Blöcke @ `31 <op> 00`, 28 Byte je Operator; Model-ID `05H` statt
+  `04H`; Identity-Reply-Bytes `41 53 06` statt `41 52 06`), 1:1 aus der
+  ESP32-Referenz `tools/refacedx/RDX-Reface-DX-emu/RDX/RDX_Midi.h` portiert.
+  Control-Change-Handling zweistufig: eine Handvoll Fälle bleiben Core-1-lokal
+  (Soft Pedal, Reset All Controllers, Omni On/Off), der große Rest wird
+  unverändert per `ipc_send_dx_cc` an `RDX_Synth::processCC` durchgereicht, das
+  bereits Mod-Wheel/Volume/Sustain/Portamento/Algorithmus-Quick-Select/
+  Operator-Quick-Edit-CCs vollständig implementiert (bislang unbenutzter
+  Code-Pfad — eine echte Vereinfachung gegenüber der ursprünglich geplanten,
+  deutlich komplexeren CC-Tabelle).
+- **`include/presets.h` + `src/presets.cpp`:** `CpPreset[8]` → `DxPreset[1]`
+  (einziger Eintrag `"DigiChord"`, bewusste Scope-Entscheidung, siehe
+  `doc/PRESETS.md`).
+- **`include/settings.h` + `src/settings.cpp`:** `SettingsV1` → `SettingsV2`
+  (Oktave + 32-Byte-SYSTEM-Block + kompletter `RDX_Patch`), Speicher-Mechanismus
+  (veeprom) unverändert.
+- **`include/pico_frontpanel.h` + `src/pico_frontpanel.cpp`:** die
+  DX-Seitenansicht (vormals nur über den Menüpunkt „DX Synth" erreichbar) ist
+  jetzt der permanente Homescreen; alle CP-Bildschirme entfernt. Menü nur noch
+  `Presets` / `System` / `<< BACK`.
+- **`CMakeLists.txt`, `src/usb_descriptors.c`:** `mdaEPiano.cpp`/
+  `pico_program_select.cpp` aus dem Build entfernt, Produktname/USB-String
+  `PicoFaceCP` → `PicoFaceDX`.
+- **`effects/cp_hot.h` → `effects/ram_hot.h`:** Makro `CP_HOT` → `RAM_HOT`
+  umbenannt (rein kosmetisch, keine Verhaltensänderung), in allen 10
+  `dx_engine`-Headern + `DX_Synth_Bridge.cpp` durchgezogen.
+
+### Build-Verifikation
+- `ninja` → alle Targets erfolgreich, keine neuen Warnungen (nur die bereits
+  bekannten, aus dem ESP32-Original geerbten).
+- **FLASH: 142.864 B / 16 MB ≈ 0,85 %** (vorher 26,76 % mit CP-Sample-Daten).
+- **RAM: 71.672 B / 512 KB ≈ 13,67 %** (vorher 45,98 %).
+- Grep-Sweep über `src/`, `include/`, `effects/` bestätigt: keine
+  `mdaEPiano`/`RefaceCpChain`/`CpPreset`/`FxParam`/`FxMode`/`CP_HOT`-Referenzen
+  mehr vorhanden (bis auf zwei rein historische Kommentarstellen, ebenfalls
+  bereinigt: `include/veeprom.h`-Kopfzeile, `.gitignore`-Einträge für die
+  gelöschten Testbinaries).
+
+### STATUS JETZT
+PicoFaceDX ist ab sofort ein **reiner reface-DX-Klon** ohne jede reface-CP-Engine,
+-Effektkette, -Presets oder -MIDI-Schicht. Die Hardware-Anbindung (Pin-Konfiguration,
+USB-MIDI-Transport, virtuelles EEPROM, generische OLED-Dialoge) bleibt unverändert
+als Skelett bestehen. Dokumentation aktualisiert: `README.md`,
+`doc/MIDI_IMPLEMENTATION.md` (v2.0), `doc/PERSISTENCE.md`, `doc/PRESETS.md`;
+`doc/CHANGELOG_MIDI_RP2350.md` als überholt/archiviert markiert.
+
+**Weiterhin offen** (unverändert gegenüber Abschnitt 9, jetzt ohne CP-Altlast):
+Master-Tune-Anwendung auf die Engine (aktuell No-Op, `tuningSemitones` nicht
+verdrahtet), echte Zahlenanzeige auf den OP/LFO-Seiten statt Platzhaltertext,
+Erweiterung der Preset-Bibliothek (Parität zur echten reface-DX-Werksbank),
+CPU-Lasttest von `MAX_VOICES=8` auf echter Hardware, ein DX-eigener
+Host-Test analog zum entfernten CP-`cp_test`.
 - **Verbleibend offen:** Patch-Persistenz, DX-eigene Effektkette, echte Werte-Anzeige auf den OP/LFO-Seiten (noch Platzhaltertext statt Zahlen — `dxDrawScreen()` zeigt für Nicht-ALGO-Seiten weiterhin nur '(values shown via encoders)'), CPU-Lasttest bei `MAX_VOICES=8`.
+
+---
+
+## 13. Nachtrag: Phase A — MIDI-Spec-Genauigkeit (2026-07-06)
+
+**Ziel:** Ein Gap-Analyse-Plan (basierend auf der offiziellen Yamaha Data List
++ Reference Manual + einer erneuten Durchsicht des ESP32-Referenzprojekts) hat
+mehrere konkrete Abweichungen unserer MIDI-Implementierung vom echten reface
+DX aufgedeckt. Diese Nachtrag behebt die kleinen, risikoarmen Korrekturen
+("Phase A" des Plans); die größeren Punkte (Preset-Bibliothek aus dem
+ESP32-Projekt, Effektkette) folgen in separaten Durchläufen.
+
+- **CC11 (Expression) war spezifiziert, aber unverdrahtet.** `RDX_Synth::processCC`
+  hatte keinen `case 11`. Neu: `RDX_Controls` bekam `expression`/`expressionFactor`
+  (Default 127/1.0, wie im echten Reset-All-Controllers-Verhalten), `processCC`
+  behandelt CC11 jetzt exakt wie CC7 (Volume), `calcOutputGain()` multipliziert
+  jetzt zusätzlich mit `expressionFactor`.
+- **CC66/CC67 (Sostenuto/Soft Pedal) existieren auf der echten reface DX nicht**
+  (nur reface CP hat sie) — bestätigt gegen die offizielle Data List. Die
+  CC67-Soft-Pedal-Behandlung (Velocity-Skalierung um 0,75×), ein Überbleibsel
+  aus der entfernten reface-CP-Schicht, wurde komplett entfernt: `_softPedal`-Member
+  aus `midi_reface.h`, alle Verwendungen in `midi_reface.cpp` (`onNoteOn`, `init`,
+  `resetControllers`, `onControlChange`).
+- **„MIDI Control"-Gate wieder eingeführt.** Die offizielle Data List bestätigt,
+  dass CC80 (Algorithmus) und CC85-90/102-119 (Operator-Quick-Edit) auf echter
+  Hardware nur greifen, wenn SYSTEM „MIDI Control" eingeschaltet ist; alle
+  anderen CCs (Mod Wheel, Volume, Expression, Sustain, Portamento, All-Sound/
+  Notes-Off) sind immer aktiv. `RefaceMidi::onControlChange` prüft das jetzt
+  korrekt vor der Weiterleitung der gegateten CCs.
+- **Reset All Controllers vervollständigt.** Die Data List spezifiziert für
+  CC121: Pitch Bend → Center, Modulation → 0 (Minimum), Expression → 127
+  (Maximum), Sustain → off. `resetControllers()` sendet jetzt alle vier statt
+  nur Pitch Bend + Sustain.
+- **Dokumentationsfehler korrigiert:** `doc/MIDI_IMPLEMENTATION.md`,
+  `doc/PRESETS.md` und ein Codekommentar in `src/midi_reface.cpp` behaupteten
+  fälschlich, das echte reface DX habe gar kein MIDI Program Change. Laut
+  offizieller Data List unterstützt es tatsächlich Program Change 0–31 (4
+  Bänke à 8 Presets) — diese Firmware implementiert davon bislang nur Wert 0
+  (einziges Preset „DigiChord"), was jetzt korrekt als offener Umfangspunkt
+  statt als (nicht existente) Spezifikationsparität dokumentiert ist.
+- **Echter Bug gefunden und behoben:** `RefaceMidi::txBulkBlock()`s Stack-Puffer
+  `buf[48]` war zu klein — ein vollständiger Common-Block-Bulk-Dump (38
+  Datenbytes) benötigt 11 Header-Bytes + 38 Daten + Checksumme + F7 = 51 Bytes,
+  also 3 Bytes mehr als der Puffer fasste (Stack-Buffer-Overflow, vom Compiler
+  als `-Wstringop-overflow` gemeldet). Puffer auf `buf[64]` vergrößert. Dieser
+  Bug bestand bereits seit der ursprünglichen SysEx-Implementierung (Abschnitt
+  12) und wurde erst durch einen erneuten vollständigen Rebuild in dieser
+  Session sichtbar.
+
+### Build-Verifikation
+
+`ninja` → erfolgreich, keine neuen Warnungen mehr (der `-Wstringop-overflow`
+durch den Puffer-Fix behoben). FLASH 143.400 B / 16 MB ≈ 0,85 %, RAM 71.752 B
+/ 512 KB ≈ 13,69 % (minimal gegenüber Abschnitt 12, durch die neuen
+`expression`/`expressionFactor`-Felder).
+
+### STATUS JETZT
+
+Phase A des 100%-Clone-Plans (`doc/CHANGELOG_DX_ENGINE.md` bzw. der
+Session-Plan) ist abgeschlossen. Noch offen: Phase B (Preset-Bibliothek aus
+den 34 `.syx`-Werksdateien des ESP32-Referenzprojekts) und Phase C
+(Effektkette — 2 Slots, 8 Effekttypen, aktuell komplett unverdrahtet trotz
+bereits reserviertem Speicherplatz in `RDX_Common::effects[2][3]`).
+
+---
+
+## 14. Nachtrag: Phase B — Preset-Bibliothek (2026-07-06)
+
+**Ziel:** Von 1 hartcodiertem Preset auf die vollständigen 32 echten
+Yamaha-reface-DX-Werkspresets erweitern (Program Change 0–31, 4 Bänke à 8).
+
+- **Neues einmaliges Host-Tool `tools/refacedx/syx_to_patches.cpp`** (nicht
+  Teil des Firmware-Builds, nicht von CMake kompiliert): liest die 32
+  offiziellen `.syx`-Factory-Voice-Bulk-Dumps aus
+  `tools/refacedx/RDX-Reface-DX-emu/RDX/data/patches/` und wendet auf jede
+  Datei die bereits verifizierte `syxToPatch()` (`include/dx_engine/RDX_Types.h`)
+  an; gibt für jedes Patch einen `{ "Name", patchFromBytes({...150 Bytes...}) }`-
+  Initialisierer aus. Gebaut mit `g++ -std=c++17` (Host-Compiler, kein
+  Pico-SDK nötig — `RDX_Types.h` ist bereits reines Standard-C++17).
+- **Verifiziert byte-exakt:** Das `voiceName`-Feld jedes geparsten Patches
+  ergibt als ASCII exakt den erwarteten Factory-Voice-Namen (Stichprobe:
+  „DigiChord ", „WobbleBass", „GlassHarp ", „Chopper   "). Byte-Zahl pro
+  Patch bestätigt `sizeof(RDX_Patch)=150` exakt.
+- **Datei-Reihenfolge → Program-Change-Zuordnung:** Die 32 Dateinamen kodieren
+  Bank+Slot (`11`=Bank1-Slot1 … `48`=Bank4-Slot8); die generierte Tabelle
+  ordnet sie exakt in PC-0..31-Reihenfolge. Eine 33. Datei
+  `00-Init_Voice.syx` existiert im ESP32-Projekt zusätzlich, ist aber kein
+  realer Factory-Bank-Slot (fällt außerhalb 0–31) und wurde bewusst
+  ausgelassen.
+- **`include/presets.h` / `src/presets.cpp`:** `DX_NPRESETS` 1→32,
+  `dxPresets[]` jetzt mit allen 32 generierten Patches gefüllt, neuer
+  `patchFromBytes()`-Helfer (memcpy der 150 rohen Bytes in ein `RDX_Patch`).
+  `preset_apply`/`preset_stage`/`preset_set_current`/`preset_get_current`
+  unverändert (Architektur war bereits korrekt für N Presets ausgelegt).
+- **Echter Folgefehler gefunden und behoben:** `pico_frontpanel.cpp`s
+  `openPresets()` baute die Menü-Auswahlliste in `char buf[128]` — bei nur 1
+  Preset unproblematisch, bei 32 Namen (bis zu 10 Zeichen + Newline, macht
+  ~360 Bytes) ein garantierter Stack-Buffer-Overflow. Puffer auf `buf[512]`
+  vergrößert.
+- **Dokumentation korrigiert:** alle verbleibenden „nur 1 Preset"/„Wert 0
+  einzig gültig"-Aussagen in `doc/MIDI_IMPLEMENTATION.md`, `doc/PRESETS.md`
+  und einem Codekommentar in `src/midi_reface.cpp` aktualisiert — Program
+  Change deckt jetzt den vollen realen Bereich 0–31 ab.
+
+### Build-Verifikation
+
+`ninja` → erfolgreich, keine neuen Warnungen. FLASH 150.272 B / 16 MB ≈
+0,90 % (vorher 0,85 % — die 32×150 Byte Presetdaten schlagen mit ca. 7 KB zu
+Buche), RAM 76.592 B / 512 KB ≈ 14,61 %.
+
+### STATUS JETZT
+
+Phase B ist abgeschlossen. Die Preset-Bibliothek erreicht volle Parität mit
+der realen reface-DX-Werksbank. Noch offen: Phase C (Effektkette — mit
+Abstand größter verbleibender Aufwand) und die bereits länger bekannten
+Punkte (Master-Tune-Verdrahtung, Zahlenanzeige auf den OP/LFO-Seiten,
+CPU-Lasttest auf echter Hardware, DX-eigener Host-Test).
+
+---
+
+## 15. Nachtrag: Phase C — Effektkette (2026-07-06)
+
+**Ziel:** Die größte verbliebene Lücke zur echten reface DX schließen: 2
+unabhängige Effekt-Slots, je wählbar aus 8 Typen (Thru, Distortion, Touch
+Wah, Chorus, Flanger, Phaser, Delay, Reverb) — bestätigt gegen die
+offizielle Yamaha Data List UND das ESP32-Referenzprojekt (`RDX_FX.h` +
+`fx_*.h`), das eine vollständige, fertige Implementierung aller 8 Typen
+mitbringt. `RDX_Common::effects[2][3]` reservierte den passenden Speicher
+bereits seit dem ursprünglichen Engine-Port, war aber nirgends verdrahtet —
+die DX-Stimme war bis eben 100% trocken.
+
+### Portierte Dateien (alle in `include/dx_engine/`, byte-treu zum ESP32-Original)
+
+- `fx_base.h` — `FXBase`-Interface (virtuell: `init`/`reset`/`processBlock`/`prepare`) + `FxThru`.
+- `fx_distortion.h`, `fx_touch_wah.h`, `fx_chorus.h`, `fx_flanger.h`,
+  `fx_phaser.h` (2-Notch-Phaser + interner Flanger-Layer, größtes Modul,
+  256 Zeilen im Original), `fx_delay.h`, `fx_reverb.h` (4 Combs + 2
+  Allpasses je Kanal) — alle DSP-Algorithmen, Koeffizienten und Konstanten
+  1:1 übernommen, keine Klangänderungen.
+- Alle benötigten LUTs/Helfer (`LFO_SPEED`, `PM_DEPTH`, `DELAY_TIME_MS`,
+  `sin01`, `semitonesToRatio`, `wrap01`, `fclamp`, `saturate_cubic`) waren
+  bereits im Projekt vorhanden (aus dem ursprünglichen Engine-Port) — keine
+  einzige neue LUT nötig.
+
+### RP2350-Anpassungen (ESP32-spezifische Teile ersetzt, DSP unangetastet)
+
+- **`prepare()`-Signatur vereinfacht:** ESP32 unterschied „fast" (DRAM)
+  und „slow" (PSRAM) Scratch-Puffer je Slot; RP2350 hat in diesem Build
+  keine PSRAM-Stufe, daher ein einziger gemeinsamer Puffer pro Slot
+  (`prepare(float* scratch, uint32_t scratchSize, int sampleRate)`).
+- **`DX_FXHost`** (`include/dx_engine/DX_FXHost.h`, neu, kein 1:1-Port):
+  2 Slots × 8 Effekttypen als statischer Objekt-Pool (kein Allocation bei
+  Effektwechsel), pro Slot ein fixer `float[24576]`-Puffer (96 KB) —
+  dimensioniert für den größten Einzelbedarf (`FxReverb`, 24276 Floats
+  errechnet, mit Marge aufgerundet). ESP32s `heap_caps_get_largest_free_block`/
+  `MALLOC_CAP_*`-Sondierung und die dynamische Polyphonie-Drosselung
+  (`VOICES`-Schätzung aus gemessener Effekt-Rechenzeit) entfallen ersatzlos
+  — dieses Projekt hat bereits ein festes `MAX_VOICES`-Budget.
+- **Speicherbudget geprüft, nicht geraten:** 2 × 96 KB = 192 KB RAM für
+  Effekt-Scratch-Puffer, macht zusammen mit dem übrigen Firmware-Bedarf
+  52,76 % von 512 KB — ausreichend Marge für Stacks etc. (siehe
+  Build-Verifikation unten).
+- **Echter Bug gefunden (via Host-Smoke-Test vor dem echten Pico-Build)
+  und behoben:** `FxTouchWah::reset(bool instant=false)` hatte eine andere
+  Signatur als `FXBase::reset()` und **versteckte** damit die virtuelle
+  Funktion statt sie zu überschreiben (`-Woverloaded-virtual`) — ein aus
+  dem ESP32-Original übernommener, dort ebenfalls bereits vorhandener
+  Bug. Aufruf über `FXBase*` (genau das, was `DX_FXHost::setSlot()` beim
+  Effektwechsel tut) rief bisher stillschweigend die No-Op-Basisversion
+  auf, sodass der interne Filter-/Hüllkurvenzustand beim Wechsel AUF
+  Touch-Wah nicht zurückgesetzt wurde. Fix: `reset()` ohne Parameter,
+  `override` ergänzt, einzige Aufrufstelle in `prepare()` angepasst.
+
+### Verdrahtung
+
+- **`DX_Synth_Bridge`:** neues Member `DX_FXHost fxHost_;`, `init()` ruft
+  `fxHost_.init((float)SAMPLE_RATE)`, `fill_buffer()` ruft
+  `fxHost_.process(scratchL_, scratchR_, chunkLen)` direkt nach
+  `synth_.renderAudioBlock(...)` und vor dem Interleaving — Effekte
+  laufen also post-mix, wie auf echter Hardware.
+- **SysEx/Patch-Editing funktioniert automatisch:** `effects[2][3]` liegt
+  im bereits adressierbaren Common-Block (Offset `0x1D–0x22`); sobald die
+  DSP die Bytes konsumiert, greift der bereits generische
+  `IPC_CMD_DX_RAW_WRITE`-Pfad ohne jede neue IPC-Arbeit.
+- **Keine MIDI-CC-Steuerung nötig:** die offizielle Data List bestätigt,
+  dass Effekte ausschließlich Patch-/SysEx-adressiert sind, keine
+  dedizierte CC-Zuordnung existiert.
+- **Neue Frontpanel-Seiten FX1/FX2** (`DX_Controller`: `DxPage` um `FX1`,
+  `FX2` erweitert; Encoder A = Effekt-Typ 0–7 geclamped wie ALGO, Encoder B
+  = Param1 0–127; beide per `ipc_send_dx_raw_write(1, offset, val)` mit
+  `offsetof(RDX_Common, effects)` statt Magic Numbers). Param2 bleibt
+  SysEx-only (wie viele andere Patch-Parameter, z. B. Voice-Name,
+  KSC-Kurven, die ebenfalls nicht über die 3 Encoder erreichbar sind).
+- **`DX_GUI::dxDrawScreen()`:** FX1/FX2-Seiten zeigen jetzt echten
+  Effekt-Namen (`FX_NAMES[]`, neu in `DX_FXHost.h`) + Param1-Wert statt
+  des generischen Platzhaltertexts — die anderen Seiten (OP1-4/LFO)
+  bleiben unverändert beim Platzhalter (weiterhin offener Punkt).
+
+### Build-Verifikation
+
+`ninja` → erfolgreich, keine neuen Warnungen außer einer bereits im
+ESP32-Original vorhandenen, harmlosen Signedness-Vergleichswarnung in
+`fx_delay.h`. FLASH 166.128 B / 16 MB ≈ 0,99 %, RAM 276.616 B / 512 KB ≈
+52,76 % (deutlicher, aber budgetierter Sprung durch die 192 KB
+Effekt-Scratch-Puffer).
+
+### STATUS JETZT
+
+Phase C ist abgeschlossen. PicoFaceDX hat jetzt eine vollständige,
+funktionierende Effektkette mit allen 8 realen reface-DX-Effekttypen,
+patch-/SysEx-editierbar und über 2 neue Frontpanel-Seiten (FX1/FX2)
+erreichbar. Alle drei Phasen des 100%-Clone-Plans (A: MIDI-Spec-Genauigkeit,
+B: Preset-Bibliothek, C: Effektkette) sind damit abgeschlossen.
+
+**Verbleibend offen** (Phase D des Plans, niedrigere Priorität):
+Master-Tune-Verdrahtung (`tuningSemitones` weiterhin unwired), echte
+Zahlenanzeige auf den OP/LFO-Seiten (weiterhin Platzhaltertext), Delay-
+Zeit-Anzeige in Millisekunden statt Rohwert, CPU-Lasttest von
+`MAX_VOICES=8` mit aktiven Effekten auf echter Hardware (durch die
+Effektkette jetzt relevanter als zuvor), kein DX-eigener Host-Test.
+
+---
+
+## 16. Nachtrag: Phase D — Politur (2026-07-06)
+
+**Ziel:** Die drei in Phase C offen gelassenen Politur-Punkte abarbeiten:
+Master-Tune-Verdrahtung, echte Zahlenanzeige auf den OP/LFO-Frontpanel-
+Seiten, und eine Messgrundlage für die CPU-Last mit aktiver Effektkette.
+
+### Master Tune verdrahtet (SYSTEM-SysEx-Parameter, keine MIDI-CC)
+
+`RDX_Controls::tuningSemitones` war seit dem ursprünglichen Engine-Port
+gespeichert/round-tripped, aber nirgends im Audiopfad konsumiert. Jetzt
+vollständig verdrahtet, End-to-End über die Core-Grenze:
+
+- **`RDX_Voice.h`** (`updateMods()`): Pitch-Berechnung erweitert von
+  `ctl_.pitchbendSemitones` auf `ctl_.pitchbendSemitones + ctl_.tuningSemitones`
+  — Master Tune wirkt additiv zum Pitch Bend auf alle Operatoren, exakt wie
+  auf echter Hardware.
+- **`RDX_Synth.h`**: neue `setMasterTune(float semitones)`, setzt
+  `ctl_.tuningSemitones`.
+- **`ipc.h`**: neues `IPC_CMD_DX_MASTER_TUNE` + `ipc_send_dx_master_tune(uint16_t rawTune)`
+  — eigener IPC-Befehl statt Zweckentfremdung von CC/Raw-Write, da Master
+  Tune global-Controls-State ist, kein Patch-Byte und keine CC. Core 0
+  dekodiert die 4 Nibble-Bytes zu Cent/Halbtönen (Formel laut offizieller
+  Yamaha Data List: `cents = (raw - 1024) * 0.1`, geklemmt auf
+  ±102,4/±102,3 Cent) in `main.cpp`s `ipc_apply()`.
+- **`DX_Synth_Bridge.h`**: `setMasterTune(float semitones)`-Passthrough zu
+  `synth_.setMasterTune()`.
+- **`midi_reface.cpp`**: `applyMasterTune()` war ein dokumentierter No-Op-
+  Stub aus Phase A (damals korrekt, weil `tuningSemitones` noch unwired
+  war) — jetzt echte Implementierung: liest `_sys[SYS_TUNE_0..3]`,
+  rekonstruiert den 16-Bit-Rohwert aus den 4 Nibbles
+  (`(t0<<12)|(t1<<8)|(t2<<4)|t3`, jeweils mit `& 0x0F` maskiert gemäß
+  offizieller Data List: „1st bit 3-0: bit 15-12" usw.), sendet ihn per
+  `ipc_send_dx_master_tune()`.
+
+### Echte Zahlenanzeige auf OP1-4/LFO-Seiten
+
+`DX_GUI::dxDrawScreen()` zeigte für OP1-4/LFO/ALGO-Seiten bisher nur den
+generischen Platzhaltertext „(values shown via encoders)" — genau wie die
+FX1/FX2-Seiten vor ihrer eigenen Anzeige in Phase C. Jetzt nach demselben
+Muster erweitert:
+
+- **OP1-4:** `"Freq: %d"` (`ops[opIdx].freqCoarse`, das was Encoder A auf
+  dieser Seite tatsächlich schreibt) und `"Level: %d"`
+  (`ops[opIdx].outLevel`, was Encoder B schreibt).
+- **LFO:** `"Speed: %d"` (`common.lfoSpeed`) und `"PMD: %d"`
+  (`common.lfoPMD`).
+- ALGO bleibt bei der grafischen Algorithmus-Darstellung (`drawAlgo()`),
+  FX1/FX2 bleiben bei ihrer Phase-C-Anzeige — beide unverändert.
+
+### CPU-Lastmessung instrumentiert (kein Hardware-Test durch mich möglich)
+
+Der Plan sah einen echten CPU-Lasttest von `MAX_VOICES=8` mit aktiven
+Effekten auf echter Hardware vor. Ich habe kein reales RP2350-Board zur
+Hand — ein tatsächlicher Hardware-Test kann daher nicht von mir
+durchgeführt oder behauptet werden. Stattdessen wurde die Messgrundlage
+geschaffen, damit der Nutzer beim Flashen selbst reale Zahlen ablesen
+kann:
+
+- **`DX_Synth_Bridge::fill_buffer()`**: misst per `time_us_32()` die
+  tatsächliche Blockdauer (Rendering + Effektkette) und vergleicht sie
+  gegen das Echtzeit-Budget des Blocks (`length / SAMPLE_RATE` Sekunden).
+  Ergebnis in zwei neuen Membern: `cpuLoadPercent_` (letzter Block) und
+  `cpuLoadPeakPercent_` (Maximum seit Boot), über `cpuLoadPercent()`/
+  `cpuLoadPeakPercent()` public lesbar — Core 1 darf sie direkt lesen,
+  gleiche Konvention wie bei `patch()`.
+- **Neue Frontpanel-Seite:** SYSTEM-Menü um „CPU Load" erweitert
+  (`pico_frontpanel.cpp`, `showCpuLoad()` nach dem Muster von
+  `showAbout()`) — zeigt „Now" und „Peak" in Prozent, live aktualisiert.
+- Kein Overhead im Hot-Path außer zwei `time_us_32()`-Aufrufen (bereits
+  IRQ-Kontext, keine zusätzliche Synchronisation nötig).
+
+### Build-Verifikation
+
+`ninja` → erfolgreich, keine neuen Warnungen. FLASH 166.384 B / 16 MB ≈
+0,99 %, RAM 276.544 B / 512 KB ≈ 52,75 % (minimaler Zuwachs gegenüber
+Phase C: +256 B FLASH, +16 B RAM für die gesamte Phase D).
+
+### STATUS JETZT
+
+Phase D ist abgeschlossen. Damit sind alle vier Phasen des
+100 %-Clone-Plans (A: MIDI-Spec-Genauigkeit, B: Preset-Bibliothek,
+C: Effektkette, D: Politur) umgesetzt. Verbleibend: der tatsächliche
+CPU-Lasttest auf echter Hardware selbst — die Messgrundlage steht, das
+Ablesen der realen Prozentzahl beim Spielen mit aktiven Effekten kann
+nur der Nutzer auf dem echten Board durchführen.
+
+---
+
+## 17. Nachtrag: Compiler-Warnungen bereinigt (2026-07-06)
+
+**Anlass:** Nutzer meldete diverse Warnungen im Build-Log. Aufgeschlüsselt
+in projekteigene (behebbar) und Vendor-Warnungen (nicht behebbar/nicht
+sinnvoll behebbar, da aus einer per CMake `FetchContent` geladenen
+Fremdabhängigkeit stammend).
+
+### Projekteigene Warnungen behoben (alle in `include/dx_engine/`)
+
+- **`misc.h` — `fclamp()`/`saturate_cubic()`:** je zwei `if`-Statements
+  standen auf einer Zeile (`-Wmisleading-indentation`) — auf separate
+  Zeilen aufgeteilt, keine Logikänderung.
+- **`misc.h` — `fast_floorf()`, echter Bug, nicht nur Warnung:**
+  `int i = (int)x - (int)(i>x);` las die lokale Variable `i` in ihrem
+  eigenen Initialisierer, bevor sie einen Wert hatte — undefiniertes
+  Verhalten (`-Wuninitialized`). **Dieser Bug existierte bereits im
+  ESP32-Original** (`tools/refacedx/RDX-Reface-DX-emu/RDX/misc.h:27`,
+  identischer Code) und wurde beim ursprünglichen Engine-Port 1:1
+  mitübernommen — analog zum bereits in Phase C gefundenen
+  `FxTouchWah::reset()`-Bug. `fast_floorf()`/`wrap01()` werden u. a. für
+  LFO-Phasenwrapping verwendet (`RDX_LFO.h`), das UB konnte also
+  potenziell zu Phasenglitches führen. Fix nach dem Standard-Trick
+  „truncate-then-adjust": `int i = (int)x; return (float)(i - (int)(i > x));`
+- **`RDX_Types.h` — `syxToPatch()`:** `while (...) i++; i++;` auf einer
+  Zeile (`-Wmisleading-indentation`) — auf zwei Zeilen aufgeteilt, das
+  unbedingte `i++` bleibt unbedingt, keine Logikänderung.
+- **`RDX_Operator.h` — Konstruktor (`-Wreorder`):** Initialisierungsliste
+  nannte `idx_` vor `params_`, obwohl `params_` in der Klasse zuerst
+  deklariert ist (C++ initialisiert immer in Deklarationsreihenfolge,
+  unabhängig von der Listenreihenfolge) — Liste umsortiert
+  (`params_` vor `idx_`), reine Kosmetik, keine Verhaltensänderung.
+- **`RDX_Synth.h` (`renderAudioBlock`) + `fx_delay.h` (`processBlock`)
+  (`-Wsign-compare`):** je eine `for`-Schleife verglich ein signed `int`
+  gegen ein unsigned `uint32_t`-Limit (`len`/`frames`) — Schleifenvariable
+  auf `uint32_t` umgestellt.
+
+### Nicht behoben (außerhalb des Projekt-Quellbaums)
+
+- `build/_deps/picotool-src/main.cpp:227` (`static_assert` ohne Message,
+  C++17-Extension-Warnung) und ein Linker-Hinweis „ignoring duplicate
+  libraries" (`liberrors.a`/`libmodel.a`) — beide stammen aus dem von
+  CMake automatisch nachgeladenen `picotool`-Quellcode
+  (`_deps/picotool-src/`), nicht aus diesem Repository. Ein Patch dort
+  würde beim nächsten `FetchContent`-Refresh verlorengehen und gehört
+  nicht zu PicoFaceDX — bewusst unverändert gelassen.
+
+### Build-Verifikation
+
+Vollständiger Rebuild (`cmake --build .` nach `touch` aller `.cpp`-Dateien,
+um jede Übersetzungseinheit neu zu kompilieren): **null Warnungen** aus
+allen Projektdateien. FLASH 163.760 B / 16 MB ≈ 0,98 %, RAM 273.912 B /
+512 KB ≈ 52,24 % — leicht kleiner als vor der Bereinigung (u. a. durch den
+Wegfall des `fast_floorf`-UB-Pfads in `misc.h`, das praktisch überall
+eingebunden wird).

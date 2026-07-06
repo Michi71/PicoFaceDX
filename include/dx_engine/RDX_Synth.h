@@ -38,7 +38,7 @@ public:
         voiceAlloc_.noteOff(voices_, MAX_VOICES, note, patch_.common.monoPoly);
     }
 
-    float __attribute__((always_inline)) CP_HOT(process)() {
+    float __attribute__((always_inline)) RAM_HOT(process)() {
         float mix = 0.f;
         const float outGain = outputGain_;
         for (int i = 0; i < MAX_VOICES; i++) {
@@ -47,10 +47,10 @@ public:
         return mix;
     }
 
-    void __attribute__((always_inline, hot)) CP_HOT(renderAudioBlock)(float* outL, float* outR, uint32_t len = DMA_BUFFER_LEN) {
+    void __attribute__((always_inline, hot)) RAM_HOT(renderAudioBlock)(float* outL, float* outR, uint32_t len = DMA_BUFFER_LEN) {
         float sample = 0.f;
         for (int i = 0; i < MAX_VOICES; i++) { voices_[i].updateLfo(); }
-        for (int i = 0; i < len; ++i) {
+        for (uint32_t i = 0; i < len; ++i) {
             sample = process();
             outL[i] = sample;
             outR[i] = sample;
@@ -122,6 +122,7 @@ public:
             case 1: ctl_.modWheel = val & 0x7F; ctl_.modWheelFactor = val * MIDI_NORM; break;
             case 5: patch_.common.portaTime = val; ctl_.portaTimeS = 0.06f + (val - 64) * MIDI_NORM  * 0.059f * 2.0f; break;
             case 7: ctl_.mainVolume = val & 0x7F; ctl_.mainVolumeFactor = val * MIDI_NORM; calcOutputGain(); break;
+            case 11: ctl_.expression = val & 0x7F; ctl_.expressionFactor = val * MIDI_NORM; calcOutputGain(); break;
             case 64:
                 ctl_.sustain = val > 63;
                 if (!ctl_.sustain) {
@@ -169,6 +170,10 @@ public:
         ctl_.pitchbendSemitones = pbNorm * ((float)(patch_.common.pbRange - 64));
     }
 
+    // Master Tune (SYSTEM SysEx parameter, not a MIDI CC): additive semitone
+    // offset applied uniformly to all operators alongside pitch bend.
+    inline void setMasterTune(float semitones) { ctl_.tuningSemitones = semitones; }
+
     void programChange(uint8_t ch, uint8_t program) {
         if (ch >= 16) return;
         ctl_.wantProgram = program & 0x7F;
@@ -192,7 +197,7 @@ public:
             case 11: algoMixCoeff_ = 0.5f  ; break;
             default: algoMixCoeff_ = 1.0f  ; break;
         }
-        outputGain_ = algoMixCoeff_ * ctl_.mainVolumeFactor * polyMixCoeff_ ;
+        outputGain_ = algoMixCoeff_ * ctl_.mainVolumeFactor * ctl_.expressionFactor * polyMixCoeff_ ;
     }
     RDX_Voice& getVoice(int idx)  {return voices_[idx];}
 

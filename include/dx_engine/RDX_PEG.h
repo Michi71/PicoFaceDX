@@ -1,5 +1,5 @@
 #pragma once
-#include "cp_hot.h"
+#include "ram_hot.h"
 #include "RDX_Constants.h"
 
 class  RDX_PEG {
@@ -11,9 +11,9 @@ public:
         if (need_reset) reset();
     }
 
-    inline float __attribute__((always_inline)) CP_HOT(outVal)() const { return current_ - CENTER; }
+    inline float __attribute__((always_inline)) RAM_HOT(outVal)() const { return current_ - CENTER; }
 
-    inline float __attribute__((always_inline)) CP_HOT(processPEG)() {
+    inline float __attribute__((always_inline)) RAM_HOT(processPEG)() {
         if (stage_ == Stage::IDLE) return outVal();
         if (stage_ == Stage::SUSTAIN_STAGE) { if (!gate_) enterStage(Stage::RELEASE); return outVal(); }
         if ( rising_ ) {

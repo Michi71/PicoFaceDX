@@ -4,11 +4,11 @@
 #include "RDX_Types.h"
 #include "RDX_State.h"
 #include "dx_engine_config.h"
-#include "cp_hot.h"
+#include "ram_hot.h"
 
 class RDX_VoiceAllocator {
 public:
-    inline __attribute__((always_inline)) int CP_HOT(findVoice)(RDX_Voice* voices, int count, uint8_t note, uint8_t vel, uint8_t mode) {
+    inline __attribute__((always_inline)) int RAM_HOT(findVoice)(RDX_Voice* voices, int count, uint8_t note, uint8_t vel, uint8_t mode) {
         switch (mode) {
             case RDX_MODE_MONO_FULL: case RDX_MODE_MONO_LEGATO:
                 pushNote(note); monoActive_ = true; return 0;
@@ -19,7 +19,7 @@ public:
         for (int i = 0; i < count; ++i) { float s = voices[i].calcScore(); if (s < minScore) { minScore = s; victim = i; } }
         voices[victim].setJustAllocated(); return victim;
     }
-    inline __attribute__((always_inline)) void CP_HOT(noteOff)(RDX_Voice* voices, int, uint8_t note, uint8_t mode) {
+    inline __attribute__((always_inline)) void RAM_HOT(noteOff)(RDX_Voice* voices, int, uint8_t note, uint8_t mode) {
         switch (mode) {
             case RDX_MODE_MONO_FULL: case RDX_MODE_MONO_LEGATO:
                 popNote(note);

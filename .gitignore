@@ -69,5 +69,4 @@ Testing/
 .cache/
 
 # host-test binaries (built by test/build*.sh)
-test/cp_test
-test/mdaepiano_test
+test/veeprom_test

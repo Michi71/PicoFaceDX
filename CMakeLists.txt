@@ -59,15 +59,13 @@ endif()
 
 add_executable(${PROJECT_NAME}
     src/usb_descriptors.c
-    src/mdaEPiano.cpp
-    src/main.cpp 
+    src/main.cpp
     src/pico_hw.cpp
     src/midi_input_usb.cpp
     src/midi_reface.cpp
     src/get_serial.c
     src/pico_selection_list.cpp
     src/pico_input_value.cpp
-    src/pico_program_select.cpp
     src/pico_frontpanel.cpp
     src/settings.cpp
     src/veeprom.cpp
@@ -90,7 +88,7 @@ endif ()
 pico_set_boot_stage2(${PROJECT_NAME} slower_boot2)
     
 
-pico_set_program_name(${PROJECT_NAME} "PicoFaceCP")
+pico_set_program_name(${PROJECT_NAME} "PicoFaceDX")
 pico_set_program_version(${PROJECT_NAME} "0.1")
 
 pico_enable_stdio_uart(${PROJECT_NAME} 1)

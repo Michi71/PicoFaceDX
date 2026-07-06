@@ -5,6 +5,7 @@
 #include "hardware/sync.h"   // __wfi
 #include "project_config.h"
 #include "ipc.h"
+#include "dx_patch_stage.h"
 #include "midi_input_usb.h"
 #include "midi_reface.h"
 #include "DX_Synth_Bridge.h"
@@ -26,9 +27,6 @@
 #include "pico_userinterface.h"
 #include "pico_frontpanel.h"
 
-#include "arduino_compat.h"
-#include "mdaEPiano.h"
-#include "cp_audio.h"
 #include "settings.h"
 #include "presets.h"
 #include "veeprom.h"
@@ -46,7 +44,7 @@ extern "C"
 
 // ---------------------------------------------------------------------------
 // Globals
-//   ep / cp_fx are owned and processed exclusively by Core 0 (audio master).
+//   dxBridge is owned and processed exclusively by Core 0 (audio master).
 //   encSel/encA/encB + btSel/btA/btB / u8g2 / usbmidi are owned and serviced
 //   exclusively by Core 1.
 //   Core 1 -> Core 0 communication goes through the SIO FIFO (see ipc.h).
@@ -66,16 +64,11 @@ audio_buffer_pool_t *ap;
 // Create the Oled screen
 u8g2_t u8g2;
 
-mdaEPiano ep(96);
-
-// DX (reface DX FM) engine -- Core 0 owned, same convention as ep/cp_fx
+// DX (reface DX FM) engine -- Core 0 owned, the sole synth engine
 DX_Synth_Bridge dxBridge;
 
-// Reface CP effect chain (post-processes the engine output)
-RefaceCpChain cp_fx;
-
 MIDIInputUSB usbmidi;
-RefaceMidi refaceMidi; // Reface CP MIDI layer (Core 1): channel filter, CC map, SysEx, active sensing
+RefaceMidi refaceMidi; // Reface DX MIDI layer (Core 1): channel filter, CC, SysEx, active sensing
 DX_Controller dxController(dxBridge); // DX encoder/page controller (Core 1): mutations via IPC (ipc_send_dx_param)
 
 /*
@@ -241,52 +234,6 @@ static void flash_unlock_core1(void) { g_flash_release = 1; uint32_t start = tim
 // ===========================================================================
 static void ipc_apply(uint32_t pkt) {
     switch (ipc_type(pkt)) {
-        case IPC_CMD_NOTE_ON:
-            ep.noteOn(ipc_d1(pkt), ipc_d2(pkt));
-            break;
-        case IPC_CMD_NOTE_OFF:
-            ep.noteOff(ipc_d1(pkt));
-            break;
-        case IPC_CMD_CC:
-            ep.processMidiController(ipc_d1(pkt), (uint8_t)ipc_d2(pkt));
-            break;
-        case IPC_CMD_FX_PARAM: {
-            float v = ipc_u16_to_f(ipc_d2(pkt));
-            switch (ipc_d1(pkt)) {
-                case FX_DRIVE: cp_fx.setDrive(v); break;
-                case FX_TW_DEPTH: cp_fx.setTremWahDepth(v); break;
-                case FX_TW_RATE: cp_fx.setTremWahRate(v); break;
-                case FX_CP_DEPTH: cp_fx.setChoPhaDepth(v); break;
-                case FX_CP_SPEED: cp_fx.setChoPhaSpeed(v); break;
-                case FX_DLY_DEPTH: cp_fx.setDelayDepth(v); break;
-                case FX_DLY_TIME: cp_fx.setDelayTime(v); break;
-                case FX_REVERB: cp_fx.setReverbDepth(v); break;
-                case FX_VOLUME: cp_fx.setVolume(v); break;
-                case FX_EXPRESSION: cp_fx.setExpression(v); break;
-                case FX_PRE_GAIN: cp_fx.setPreGain(v); break;
-            }
-        } break;
-        case IPC_CMD_FX_MODE: {
-            int m = (int)ipc_d2(pkt);
-            switch (ipc_d1(pkt)) {
-                case FXM_TW_MODE: cp_fx.setTremWahMode(m); break;
-                case FXM_CP_MODE: cp_fx.setChoPhaMode(m); break;
-                case FXM_DLY_MODE: cp_fx.setDelayMode(m); break;
-            }
-        } break;
-        case IPC_CMD_VOICE_PARAM:
-            ep.setParameter(ipc_d1(pkt), ipc_u16_to_f(ipc_d2(pkt)));
-            break;
-        case IPC_CMD_PROGRAM:
-            preset_apply(ipc_d1(pkt), &ep, &cp_fx);
-            break;
-        case IPC_CMD_INSTRUMENT:
-            ep.setInstrument(ipc_d1(pkt));
-            cp_fx.setVoiceType(ep.getCurrentInstrument());
-            break;
-        case IPC_CMD_PITCH_BEND:
-            ep.setPitchBend((int32_t)ipc_d2(pkt));
-            break;
         case IPC_CMD_FLASH_LOCK: flash_park_core0(); break;
         case IPC_CMD_DX_NOTE_ON:
             dxBridge.noteOn(ipc_d1(pkt), ipc_d2(pkt));
@@ -312,6 +259,35 @@ static void ipc_apply(uint32_t pkt) {
                 case DX_PARAM_OP1_FEEDBACK:p.ops[0].feedback   = val; break;
                 default: break;
             }
+            break;
+        }
+        case IPC_CMD_DX_PITCH_BEND:
+            dxBridge.updatePB((int)ipc_d2(pkt) - 8192);
+            break;
+        case IPC_CMD_DX_CC:
+            dxBridge.processCC(ipc_d1(pkt), (uint8_t)ipc_d2(pkt));
+            break;
+        case IPC_CMD_DX_RAW_WRITE: {
+            uint8_t byteOffset = ipc_d1(pkt);
+            uint8_t blockSel = ipc_raw_write_block_sel(pkt);
+            uint8_t value = ipc_raw_write_value(pkt);
+            RDX_Patch &p = dxBridge.patch();
+            if (blockSel == 1 && byteOffset < sizeof(RDX_Common)) {
+                reinterpret_cast<uint8_t*>(&p.common)[byteOffset] = value;
+            } else if (blockSel >= 2 && blockSel <= 5 && byteOffset < sizeof(RDX_OpParams)) {
+                reinterpret_cast<uint8_t*>(&p.ops[blockSel - 2])[byteOffset] = value;
+            }
+            break;
+        }
+        case IPC_CMD_DX_PATCH_APPLY:
+            preset_apply(&dxBridge);
+            break;
+        case IPC_CMD_DX_MASTER_TUNE: {
+            uint16_t raw = ipc_d2(pkt);
+            float cents = ((int)raw - 1024) * 0.1f;
+            if (cents < -102.4f) cents = -102.4f;
+            if (cents > 102.3f) cents = 102.3f;
+            dxBridge.setMasterTune(cents / 100.0f);
             break;
         }
     }
@@ -341,30 +317,30 @@ void play_random_notes_step(void) {
         case 0:
             x = rand() % 11;
             d = 64 + rand() % 63;
-            ipc_send_note_on((uint8_t)(48 + x), (uint8_t)(90 + d));
+            ipc_send_dx_note_on((uint8_t)(48 + x), (uint8_t)(90 + d));
             next = make_timeout_time_ms(100);
             phase = 1;
             break;
         case 1:
-            ipc_send_note_on((uint8_t)(52 + x), (uint8_t)(90 + d));
+            ipc_send_dx_note_on((uint8_t)(52 + x), (uint8_t)(90 + d));
             next = make_timeout_time_ms(100);
             phase = 2;
             break;
         case 2:
-            ipc_send_note_on((uint8_t)(55 + x), (uint8_t)(90 + d));
+            ipc_send_dx_note_on((uint8_t)(55 + x), (uint8_t)(90 + d));
             next = make_timeout_time_ms(100);
             phase = 3;
             break;
         case 3:
-            ipc_send_note_on((uint8_t)(60 + x), (uint8_t)(90 + d));
+            ipc_send_dx_note_on((uint8_t)(60 + x), (uint8_t)(90 + d));
             next = make_timeout_time_ms(2000);
             phase = 4;
             break;
         case 4:
-            ipc_send_note_off((uint8_t)(48 + x));
-            ipc_send_note_off((uint8_t)(52 + x));
-            ipc_send_note_off((uint8_t)(55 + x));
-            ipc_send_note_off((uint8_t)(60 + x));
+            ipc_send_dx_note_off((uint8_t)(48 + x));
+            ipc_send_dx_note_off((uint8_t)(52 + x));
+            ipc_send_dx_note_off((uint8_t)(55 + x));
+            ipc_send_dx_note_off((uint8_t)(60 + x));
             next = make_timeout_time_ms(2000);
             phase = 0;
             break;
@@ -384,9 +360,9 @@ static void gui_step(void) {
         u8g2_SetDrawColor(&u8g2, 1);
         cleared = true;
     }
-    // The virtual front panel is the home screen; it loops forever and opens
-    // the Presets / System main menu from its MENU entry.
-    pico_UserInterfaceFrontPanel(&u8g2, &encSel, &btSel, &encA, &btA, &encB, &btB, &ep, &cp_fx);
+    // The DX page view is the home screen; it loops forever and opens the
+    // Presets / System main menu on a long press of the selector.
+    pico_UserInterfaceFrontPanel(&u8g2, &encSel, &btSel, &encA, &btA, &encB, &btB);
 }
 
 // ===========================================================================
@@ -397,7 +373,7 @@ void ui_poll_usb(void) {
     tud_task();
     usbmidi.process();
     refaceMidi.tick();
-    settings_task(&ep, &cp_fx, &refaceMidi);   // debounced autosave to virtual EEPROM
+    settings_task(&dxBridge, &refaceMidi);   // debounced autosave to virtual EEPROM
 #if PLAY_RANDOM_NOTES
     play_random_notes_step();
 #endif
@@ -453,7 +429,7 @@ void core1_main(void) {
   usbmidi.setRealtimeCallback(realtime_callback);
   usbmidi.setSysExCallback(sysex_callback);
   usbmidi.setActivityCallback(activity_callback);
-  refaceMidi.init(&ep, &cp_fx);
+  refaceMidi.init(&dxBridge);
   settings_boot_restore_core1(&refaceMidi);  // restore octave + MIDI SYSTEM block
   while (1) {
       ui_poll_usb();
@@ -466,21 +442,10 @@ void core1_main(void) {
 // ===========================================================================
 int main(void) {
   pico_init();
-  ep.setVolume(64);
   dxBridge.init();
-  cp_fx.init((float)SAMPLING_RATE);
-  cp_fx.setVoiceType(ep.getCurrentInstrument());
-  cp_fx.setVolume(0.9f);
-  cp_fx.setDrive(0.0f);
-  cp_fx.setChoPhaMode(RefaceCpChain::CP_OFF);
-  cp_fx.setChoPhaDepth(0.4f);
-  cp_fx.setChoPhaSpeed(0.3f);
-  cp_fx.setReverbDepth(0.0f);
-  cp_fx.setTremWahMode(RefaceCpChain::TW_OFF);
-  cp_fx.setDelayMode(RefaceCpChain::DLY_OFF);
   // Defaults above act as the fallback when no valid settings record exists.
   veeprom_set_lock_hooks(flash_lock_core1, flash_unlock_core1);
-  settings_boot_restore_core0(&ep, &cp_fx);   // single-core phase: plain XIP reads, direct setters
+  settings_boot_restore_core0(&dxBridge);   // single-core phase: plain XIP reads, direct setters
   // Core 1 (USB/MIDI/UI) must launch BEFORE init_audio(): the SDK uses the SIO
   // FIFO for the core-launch handshake, and the audio DMA IRQ drains that same
   // FIFO (i2s_callback_func) -> it must not run during the launch handshake.
@@ -497,16 +462,12 @@ void __not_in_flash_func(i2s_callback_func)() {
   while (multicore_fifo_rvalid()) { ipc_apply(multicore_fifo_pop_blocking()); }
   audio_buffer_t *buffer = take_audio_buffer(ap, false);
   if (buffer == NULL) { return; }
-  int16_t l[buffer->max_sample_count];
-  int16_t r[buffer->max_sample_count];
   int32_t *samples = (int32_t *)buffer->buffer->bytes;
-  ep.process(&l[0], &r[0]);
-  cp_process_block_i16(cp_fx, &l[0], &r[0], buffer->max_sample_count);
   float dxBuf[buffer->max_sample_count * 2];
   dxBridge.fill_buffer(dxBuf, buffer->max_sample_count);
   for (uint i = 0; i < buffer->max_sample_count; i++) {
-      int32_t dl = (int32_t)(dxBuf[i * 2 + 0] * 32767.0f) + l[i];
-      int32_t dr = (int32_t)(dxBuf[i * 2 + 1] * 32767.0f) + r[i];
+      int32_t dl = (int32_t)(dxBuf[i * 2 + 0] * 32767.0f);
+      int32_t dr = (int32_t)(dxBuf[i * 2 + 1] * 32767.0f);
       if (dl < -32768) dl = -32768; else if (dl > 32767) dl = 32767;
       if (dr < -32768) dr = -32768; else if (dr > 32767) dr = 32767;
       samples[i * 2 + 0] = dl << 16;

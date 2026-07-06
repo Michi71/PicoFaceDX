@@ -1,6 +1,6 @@
 // RDX_LFO.h
 #pragma once
-#include "cp_hot.h"
+#include "ram_hot.h"
 #include <cmath>
 #include "RDX_Constants.h"
 #include "misc.h"
@@ -55,8 +55,8 @@ public:
         prevValue_ = v1; phase_ = endPhase; prevPhase_ = startPhase;
     }
 
-    inline float __attribute__((always_inline)) CP_HOT(getValue)() const { return value_; }
-    inline float __attribute__((always_inline)) CP_HOT(getIncrement)() const { return increment_; }
+    inline float __attribute__((always_inline)) RAM_HOT(getValue)() const { return value_; }
+    inline float __attribute__((always_inline)) RAM_HOT(getIncrement)() const { return increment_; }
 
 private:
     inline float randomFloat() {

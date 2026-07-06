@@ -6,8 +6,12 @@
 // ---------------------------------------------------------------------------
 // Menu page enumeration. One page per logical control context.
 // Order matters: OP1..OP4 index directly into patch.ops[page].
+// FX1/FX2 = the reface DX's 2 effect slots (Type + Param1 editable from the
+// front panel; Param2 is SysEx-only, matching how many other patch parameters
+// -- e.g. voice name, KSC curves -- are already SysEx-only and not reachable
+// from the 3-encoder front panel).
 // ---------------------------------------------------------------------------
-enum class DxPage : uint8_t { OP1 = 0, OP2, OP3, OP4, LFO, ALGO, COUNT };
+enum class DxPage : uint8_t { OP1 = 0, OP2, OP3, OP4, LFO, ALGO, FX1, FX2, COUNT };
 
 // Architektur-Hinweis:
 // Diese Klasse ist sicher fuer Core 1. Parameteraenderungen durch Encoder2/3

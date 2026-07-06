@@ -1,6 +1,6 @@
 // include/veeprom.h
 //
-// Virtual EEPROM for PicoFaceCP firmware.
+// Virtual EEPROM for PicoFaceDX firmware.
 //
 // Purpose:
 //   Persistent settings storage implemented as a wear-leveled append log

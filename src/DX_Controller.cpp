@@ -2,6 +2,7 @@
 #include "ipc.h"
 
 #include <cstdint>
+#include <cstddef>
 
 // ---------------------------------------------------------------------------
 // Page advance with correct modulo for negative deltas.
@@ -10,7 +11,7 @@
 DxPage DX_Controller::advancePage(DxPage current, int delta) {
     constexpr int N = static_cast<int>(DxPage::COUNT);
     int idx = static_cast<int>(current) + delta;
-    idx = ((idx % N) + N) % N;  // safe for negative idx
+    idx = ((idx % N) + N) % N;
     return static_cast<DxPage>(idx);
 }
 
@@ -55,6 +56,14 @@ void DX_Controller::onEncoder2(int delta) {
             ipc_send_dx_param(DX_PARAM_ALGO, newVal);
             break;
         }
+        case DxPage::FX1:
+        case DxPage::FX2: {
+            uint8_t slot = (page_ == DxPage::FX1) ? 0 : 1;
+            uint8_t offset = (uint8_t)(offsetof(RDX_Common, effects) + slot * 3 + 0);
+            uint8_t newVal = clampAdd(p.common.effects[slot][0], delta, 0, 7);
+            ipc_send_dx_raw_write(1, offset, newVal);
+            break;
+        }
         case DxPage::COUNT:
             break;  // unreachable
     }
@@ -87,6 +96,14 @@ void DX_Controller::onEncoder3(int delta) {
             ipc_send_dx_param(DX_PARAM_OP1_FEEDBACK, newVal);
             break;
         }
+        case DxPage::FX1:
+        case DxPage::FX2: {
+            uint8_t slot = (page_ == DxPage::FX1) ? 0 : 1;
+            uint8_t offset = (uint8_t)(offsetof(RDX_Common, effects) + slot * 3 + 1);
+            uint8_t newVal = clampAdd(p.common.effects[slot][1], delta, 0, 127);
+            ipc_send_dx_raw_write(1, offset, newVal);
+            break;
+        }
         case DxPage::COUNT:
             break;  // unreachable
     }
@@ -100,6 +117,8 @@ const char* DX_Controller::pageName() const {
         case DxPage::OP4:  return "OP4";
         case DxPage::LFO:  return "LFO";
         case DxPage::ALGO: return "ALGO";
+        case DxPage::FX1:  return "FX1";
+        case DxPage::FX2:  return "FX2";
         case DxPage::COUNT: return "??";  // unreachable
     }
     return "??";

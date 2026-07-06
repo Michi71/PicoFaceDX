@@ -2,78 +2,96 @@
 
 ## Überblick
 
-Die Firmware stellt **8 statische Werkspresets** zur Verfügung, die die früheren
-mdaEPiano-Programme (Default, Bright, Mellow, Autopan, Tremolo) ablösen.
-Jedes Preset besteht aus:
+Die Firmware enthält die vollständige Werkspreset-Bank des Yamaha reface DX: alle 32 offiziellen Factory-Voices, byte-exakt geparst aus den offiziellen `.syx`-Dumps. Die Presets sind in `src/presets.cpp` als konstante Tabelle abgelegt und werden über Index bzw. MIDI Program Change angesprochen.
 
-- einem **Instrument** (Rd I, Rd II, Wr, Clv, Pno, CP),
-- **12 Engine-Parametern** sowie
-- der kompletten **FX-Ketten-Einstellung** (Drive → Trem/Wah → Cho/Pha → Delay → Reverb).
+Definitionen in `include/presets.h`:
 
-Klangliche Orientierung: _velvetkeys_-Preset-Sammlung
-(github.com/Michi71/velvetkeys). Bewusste Abweichung vom Original-Yamaha
-Reface CP, das keine Presets besitzt.
+```c
+#define DX_NPRESETS 32
+struct DxPreset { const char* name; RDX_Patch patch; };
+extern const DxPreset dxPresets[DX_NPRESETS];
+```
 
----
+Die Array-Reihenfolge entspricht exakt der realen reface DX MIDI Program Change-Belegung (laut offiziellem Yamaha Data List):
+
+- PC 0–7 = Bank 1, Slots 1–8
+- PC 8–15 = Bank 2, Slots 1–8
+- PC 16–23 = Bank 3, Slots 1–8
+- PC 24–31 = Bank 4, Slots 1–8
 
 ## Preset-Auswahl
 
-### (a) Menü-gesteuert
+### a) Menü-gesteuert
 
-1. **Selector lang drücken** → MENU öffnen.
-2. Eintrag **Presets** anwählen.
-3. Encoder blättert durch P0…P7.
-4. Preset wird **sofort angewendet**.
+Langer Druck auf den Selector öffnet das Menü: **MENU → Presets**. Es wird eine Auswahlliste aller 32 Werkspreset-Namen angezeigt. Der Encoder scrollt durch die Liste; bei der Auswahl wird das Preset über `preset_stage`/`preset_set_current` angewendet und der entsprechende MIDI Program Change über `refaceMidi.txProgram` gesendet — wie bisher.
 
-### (b) MIDI Program Change
+### b) MIDI Program Change
 
-Ein **Program Change 0–7** wählt das entsprechende Preset P0…P7; Werte ≥ 8
-werden ignoriert. Bei Preset-Wahl im Menü sendet die Firmware den passenden
-Program Change auf dem TX-Kanal.
+MIDI Program Change funktioniert nun über den **gesamten realen Adressbereich**:
 
-> **Hinweis:** Das Original-Reface-CP implementiert Program Change gar nicht —
-> dies ist die einzige Preset-bedingte MIDI-Abweichung. **CC80 (TYPE) behält
-> die Original-Bedeutung** und wählt wie beim Yamaha-Gerät das Instrument
-> (6 Zonen); die Instrumentwahl am VOICE-Screen sendet weiterhin CC80.
-> Program Change ist nicht an die MIDI-Control-Einstellung gebunden, nur an
-> den Empfangskanal-Filter.
-
----
+- PC 0–31 sind gültig und wählen das entsprechende Preset über `onProgramChange -> preset_stage` aus.
+- Werte ≥ 32 werden ignoriert (entspricht der realen Spec: genau 32 adressbare Slots, keine offene Lücke mehr).
 
 ## Werkspresettabelle
 
-| #  | Name          | Instrument | Effekte                                           | Charakter                              |
-|----|---------------|------------|---------------------------------------------------|----------------------------------------|
-| 0  | Rd I Classic  | Rd I       | Reverb 15%                                        | neutrales Rhodes Mark I                |
-| 1  | Rd II Chorus  | Rd II      | Chorus 45%/30%, Reverb 20%, Treble +10%            | klassisches Suitcase mit Analog-Chorus |
-| 2  | Phaser Rd     | Rd II      | Phaser 60%/35%, Reverb 20%                         | deutlicher Phaser-Sweep                |
-| 3  | Wurli Trem    | Wr         | Tremolo 55%/50%, Drive 20%, Reverb 15%            | Wurlitzer 200A mit Röhren-Anzerrung    |
-| 4  | Funky Clv     | Clv        | Touch-Wah 70%/50%, Reverb 10%                     | funkiges Clavinet                      |
-| 5  | Piano Hall    | Pno        | Reverb 45%, Release +10%                          | akustisches Piano im Saal             |
-| 6  | CP Delay      | CP         | Analog-Delay 35%/45%, Drive 15%, Reverb 20%       | CP80 mit Bandecho-Charakter           |
-| 7  | Space Rd      | Rd I       | Chorus 50%/30%, Digital-Delay 30%/50%, Reverb 40%, Release +10% | ambienter Kombi-Effekt |
-
----
+| PC# | Name |
+|----:|------|
+| 0 | DigiChord |
+| 1 | WobbleBass |
+| 2 | MotionPad |
+| 3 | LegendEP |
+| 4 | DynaLead |
+| 5 | DarkBass |
+| 6 | TublarBell |
+| 7 | D_n_Beats |
+| 8 | BeginSweep |
+| 9 | MoDemLead |
+| 10 | BeepBass |
+| 11 | BitTune |
+| 12 | TinPerc |
+| 13 | BleepClv |
+| 14 | FeelIt |
+| 15 | BuzzSiren |
+| 16 | WoodEP |
+| 17 | UniLead |
+| 18 | AttackBass |
+| 19 | CloudPad |
+| 20 | AmbiPluck |
+| 21 | Marimba |
+| 22 | CheezOrgan |
+| 23 | FM_Brass |
+| 24 | SolPhase |
+| 25 | FlyingKode |
+| 26 | AlTiPad |
+| 27 | StarPad |
+| 28 | WarmPad |
+| 29 | FutureBell |
+| 30 | GlassHarp |
+| 31 | Chopper |
 
 ## Technische Details
 
-Die Presettabelle ist statisch in **`src/presets.cpp`** definiert
-(Struct `CpPreset`, Deklaration in `include/presets.h`).
+### Provenienz der `.syx`-Konvertierung
 
-Die Anwendung erfolgt **atomar auf Core 0** über den Befehl
-`IPC_CMD_PROGRAM → preset_apply()`. Dieser Aufruf setzt:
+Die 32 Presets wurden aus den offiziellen `.syx`-Factory-Voice-Bulk-Dumps extrahiert, die mit dem ESP32-Referenzprojekt geliefert wurden, aus dessen FM-Engine diese Codebase portiert wurde (`tools/refacedx/RDX-Reface-DX-emu/RDX/data/patches/*.syx`).
 
-- das Instrument,
-- die 12 Engine-Parameter,
-- alle FX-Modi und -Werte.
+Ein einmaliges Host-Only-Tool, `tools/refacedx/syx_to_patches.cpp`, parst diese Dumps mit der bereits verifizierten `syxToPatch()`-Funktion (`include/dx_engine/RDX_Types.h`). Das Tool ist **nicht Teil des Firmware-Builds** und wird **nicht von CMake kompiliert**. Sein stdout erzeugt 32 byte-exakte `patchFromBytes({...})`-Initialisierer, die direkt in die `dxPresets[]`-Tabelle in `src/presets.cpp` eingefügt wurden.
 
-Nach dem Laden greift die **normale Settings-Persistenz**: Der resultierende
-Panel-Zustand wird gespeichert, **nicht** der Preset-Index. Ein erneutes
-Einschalten liefert also den zuletzt aktiven Klang, unabhängig vom Ursprung.
+### Verifikation
 
-### Neutralisierte Engine-Parameter
+Byte-exakte Verifikation: Das `voiceName`-Feld jedes Patches, als ASCII dekodiert, stimmt exakt mit dem realen Factory-Voice-Namen überein (stichprobenartig geprüft: „DigiChord", „WobbleBass", „GlassHarp", „Chopper").
 
-Die Engine-Parameter **4 (Modulation)**, **5 (LFO Rate)** und
-**11 (Overdrive)** werden von den Presets neutralisiert, da die FX-Kette
-autoritativ ist und diese Werte sonst doppelt beeinflussen würde.
-Diese Parameter sind im **V.PARAMS-Screen** ausgeblendet.
+### preset_apply / preset_stage
+
+- `preset_stage(uint8_t idx)` (Core 1): Stagt `dxPresets[idx].patch` in den Cross-Core-Staging-Slot (`include/dx_patch_stage.h`) und sendet `IPC_CMD_DX_PATCH_APPLY`.
+- `preset_apply(DX_Synth_Bridge* dx)` (**nur Core 0**): Kopiert das gestagte Patch in `dx->patch()`.
+
+## Persistenz
+
+Unverändert: Nach dem Laden eines Presets werden die resultierenden **Patch-Bytes** (nicht der Preset-Index) durch das normale SettingsV2-Autosave gespeichert.
+
+## Status
+
+Die zuvor als separat geplante Aufgabe („Factory-Voice-Bibliothek": nur 1 hartcodiertes Preset vs. 32-Voice-Werksbank des realen reface DX) ist **abgeschlossen**. Die Preset-Tabelle erreicht nun volle Parität mit der realen reface DX-Werksbank (32 Stimmen, PC 0–31).
+
+Hinweis: Das Patch-Verzeichnis des ESP32-Referenzprojekts enthält zusätzlich eine 33. Datei `00-Init_Voice.syx`. Diese ist kein realer Factory-Bank-Slot und fällt aus dem Program-Change-Adressbereich 0–31 heraus; sie wurde bewusst nicht in die Preset-Tabelle aufgenommen, um die Adressierung exakt an der realen 32-Slot-Spec zu halten.

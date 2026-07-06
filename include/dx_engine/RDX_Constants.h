@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <array>
 #include <cmath>
-#include "cp_hot.h"
+#include "ram_hot.h"
 #include "misc.h"
 
 constexpr float DIV_SAMPLE_RATE = 1.0f / (float)SAMPLE_RATE;
@@ -99,14 +99,14 @@ constexpr LevelLUT levelLUT = buildLevelLUT();
 constexpr float LEVEL_LUT_MAX = levelLUT.maxValue;
 
 // ---- Accessors ----
-inline __attribute__((always_inline)) float CP_HOT(rdxGain)(float level) {
+inline __attribute__((always_inline)) float RAM_HOT(rdxGain)(float level) {
     int i = (int)level;
     float frac = level - i;
     return levelLUT.forward[i] +
            frac * (levelLUT.forward[i + 1] - levelLUT.forward[i]);
 }
 
-inline __attribute__((always_inline)) float CP_HOT(rdxGainInv)(float value) {
+inline __attribute__((always_inline)) float RAM_HOT(rdxGainInv)(float value) {
     float scaled = value / LEVEL_LUT_MAX * (LEVEL_LUT_SIZE - 1);
     int i = (int)scaled;
     float frac = scaled - i;
@@ -283,7 +283,7 @@ constexpr float SEMITONE_LUT[LFO_SEMITONE_LUT_ENTRIES] = {
 };
 
 // Semitones offset to ratio
-inline __attribute__((always_inline)) float CP_HOT(semitonesToRatio)(float offset) {
+inline __attribute__((always_inline)) float RAM_HOT(semitonesToRatio)(float offset) {
     float idxf = offset + (float)LFO_SEMITONE_LUT_CENTER;
     int idx    = (int)idxf ; // no guards cause we use 256 entries array, while theoretical max offset is 48 + 24 = 72, which equals 144 + 1 entries
     float s0 = SEMITONE_LUT[idx];
@@ -332,7 +332,7 @@ constexpr auto buildTable() {
 const std::array<float, SINLUT_SIZE+1> sinTable = buildTable();
  
 // phase in [0..1), output [-1..1]
-inline __attribute__((always_inline)) float CP_HOT(sin01)(float phase) {
+inline __attribute__((always_inline)) float RAM_HOT(sin01)(float phase) {
     float idxf = phase * SINLUT_SIZE;
     int idx    = (int)idxf ;
     float frac = idxf - (float)idx;

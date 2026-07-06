@@ -24,6 +24,7 @@ inline uint8_t rdxSyxChecksum(std::initializer_list<uint8_t> list) {
 struct RDX_Controls {
     int pitchbend = 0; float pitchbendSemitones = 0.0f;
     int mainVolume = 100; float mainVolumeFactor = 1.0f;
+    int expression = 127; float expressionFactor = 1.0f;
     float tuningSemitones = 0.0f;
     int modWheel = 0; float modWheelFactor = 0.0f;
     bool sustain = false; bool portamento = false; float portaTimeS = 0.06f;
@@ -92,7 +93,8 @@ static inline bool syxToPatch(const uint8_t* syx, uint32_t len, RDX_Patch& patch
             if (op<0 || op>3) return false;
             if (rdxSyxChecksum(data, dlen)!=syx[i+7+dlen]) return false;
             memcpy(&patch.ops[op], data+4, 28); }
-        while (i < len && syx[i]!=0xF7) i++; i++;
+        while (i < len && syx[i]!=0xF7) i++;
+        i++;
     }
     return true;
 }

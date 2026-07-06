@@ -59,7 +59,7 @@ inline void noteOff() {
     peg_.gate(false); active_ = false; sustained_ = false;
 }
 
-inline void __attribute__((always_inline)) CP_HOT(updateMods)() {
+inline void __attribute__((always_inline)) RAM_HOT(updateMods)() {
     float peg_value = peg_.processPEG();
     if (portamentoPos_ < 1.f) {
         portamentoPos_ += portamentoInc_;
@@ -69,7 +69,7 @@ inline void __attribute__((always_inline)) CP_HOT(updateMods)() {
     const float portaOffsetSemitones = currentNote - noteOnBaseNote_;
     lfoValue_ += lfoIncrement_;
     const float modWheelLfo = lfoValue_ * ctl_.modWheelFactor;
-    const float pitchBend = ctl_.pitchbendSemitones;
+    const float pitchBend = ctl_.pitchbendSemitones + ctl_.tuningSemitones;
     const float pmMult = lfoValue_ * pmDepth_;
     for (int i = 0; i < 4; ++i) {
         float phaseMod = 0.f;
@@ -111,7 +111,7 @@ inline void __attribute__((always_inline)) CP_HOT(updateMods)() {
         algorithm_ = patch_.common.algorithm;
     }
 
-    inline void __attribute__((always_inline)) CP_HOT(updateLfo)() {
+    inline void __attribute__((always_inline)) RAM_HOT(updateLfo)() {
         lfo_.updateState(); lfoValue_ = lfo_.getValue(); lfoIncrement_ = lfo_.getIncrement();
     }
 
@@ -123,7 +123,7 @@ inline void __attribute__((always_inline)) CP_HOT(updateMods)() {
         return score_;
     }
 
-    inline float __attribute__((always_inline, hot)) CP_HOT(step)() {
+    inline float __attribute__((always_inline, hot)) RAM_HOT(step)() {
         updateMods();
         switch(algorithm_) {
             case 0: return (ampMod_[0] * ops_[0].compute( ampMod_[1] * ops_[1].compute( ampMod_[2] * ops_[2].compute( ampMod_[3] * ops_[3].compute(0.0f, phaseMod_[3]) , phaseMod_[2] ) , phaseMod_[1] ) , phaseMod_[0] ));

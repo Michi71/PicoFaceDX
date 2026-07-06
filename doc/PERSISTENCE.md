@@ -1,37 +1,35 @@
-# PicoFaceCP Persistence (Virtual EEPROM)
+# PicoFaceDX Persistence (Virtual EEPROM)
 
 ## Overview
 - **Target:** RP2350 dual-core bare-metal (Core 0: audio, Core 1: USB+UI).
 - **Feature:** Virtual EEPROM restores full panel state after power-up.
 - **Persisted State:**
-  - Instrument selection.
-  - 12 voice parameters.
-  - All FX knobs (drive, trem/wah depth+rate, cho/pha depth+speed, delay depth+time, reverb, volume, pre-gain).
-  - 3 FX modes.
-  - Octave.
-  - 32-B MIDI SYSTEM block.
+  - Octave (-2..+2 UI transpose).
+  - 32-B MIDI SYSTEM block (RefaceMidi SYSTEM common image).
+  - Full current DX patch (`RDX_Patch`: common + 4 operators, ~66 B).
 - **Not Persisted:** Expression pedal, sustain.
 
 ## Flash Layout
 - **Location:** Last two 4 KB sectors of 16 MB flash.
 - **Format:** Append log of 256-B records.
   - Header: `{magic 0x50434650, seq u32, version u16, len u16, crc32(payload)}`.
-  - Payload: `SettingsV1` (<=240 B).
+  - Payload: `SettingsV2` (<=240 B).
 - **Load:** Highest valid `seq` selected.
 - **Save:** Next slot written; sector erase on entry (ping-pong).
 - **Endurance:** ~100k cycles x 32 saves/erase-pair.
 
 ## Autosave
-- **Execution:** Core 1 `settings_task` in `ui_poll_usb`.
+- **Execution:** Core 1 `settings_task(DX_Synth_Bridge* dx, RefaceMidi* rm)` in `ui_poll_usb`.
 - **Trigger:** 250 ms snapshot poll; write after 2 s stability.
 - **Boot Protection:** Baseline after boot restore prevents boot-saves.
 - **Error Handling:** Failed saves auto-retry.
 
 ## Boot Restore
-- **Core 0:** `settings_boot_restore_core0` in `main()` (single-core phase).
+- **Core 0:** `settings_boot_restore_core0(DX_Synth_Bridge* dx)` in `main()` (single-core phase).
   - Uses XIP reads, direct setters, defaults as fallback.
-- **Core 1:** `settings_boot_restore_core1` after `refaceMidi.init`.
+- **Core 1:** `settings_boot_restore_core1(RefaceMidi* rm)` after `refaceMidi.init`.
   - Restores octave + sanitized SYSTEM block, reapplies master tune.
+  - `applyMasterTune()` reconstructs the 16-bit tune value from the 4 stored nibbles and sends it to Core 0 via `IPC_CMD_DX_MASTER_TUNE`, which applies it additively to pitch bend on all operators (see `doc/CHANGELOG_DX_ENGINE.md` §16).
 
 ## Multicore Flash Safety
 - **Constraint:** Erase/program kills XIP; SDK `flash_safe_execute` unusable (lockout uses SIO FIFO = our IPC channel).

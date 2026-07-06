@@ -27,7 +27,7 @@ USB-MIDI (Core 1)
     │
     ▼
 DX_Controller (Core 1) ──► DX_GUI ──► SH1106 OLED
-    │                         ▲
+    │                          ▲
     │ lock-free 32-bit FIFO    │
     ▼ (ipc.h)                  │
 DX_Synth_Bridge (Core 0) ──────┘

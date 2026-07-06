@@ -70,3 +70,4 @@ Testing/
 
 # host-test binaries (built by test/build*.sh)
 test/veeprom_test
+/tools/refacedx

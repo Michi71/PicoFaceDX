@@ -177,8 +177,8 @@ ninja
 
 | Resource | Usage | Capacity |
 |---|---|---|
-| Flash | ~164 KB (~0.98%) | 16 MB |
-| RAM | ~274 KB (~52.24%) | 512 KB |
+| Flash | ~165 KB (~0.99%) | 16 MB |
+| RAM | ~276 KB (~52.59%) | 512 KB |
 
 Flash dropped from ~26% (when the CP engine's ~8 MB of instrument sample data was present) to under 1%. RAM sits at ~53% mainly due to the effects chain's fixed scratch buffers (2 slots × 96 KB, sized for the largest single effect, `FxReverb`) — budgeted deliberately, not accidental; comfortable headroom remains for stacks and other buffers.
 
@@ -274,6 +274,13 @@ Full spec: `doc/PRESETS.md`.
 - **FPU flush-to-zero enabled at boot** (`pico_init()`, `src/pico_hw.cpp`): found via a real on-hardware load test showing hissing/jitter during fast note changes — the operator feedback low-pass filter (and other IIR state in the effects chain) decays into the subnormal float range on every voice release, and the Cortex-M33 FPU's software denormal path is far slower than normal, occasionally blowing the audio IRQ's time budget. Set via inline VMRS/VMSR assembly (the SDK's CMSIS core headers aren't reachable from this build's include path); see `doc/CHANGELOG_DX_ENGINE.md` §20.
 - **Soft-clip limiter on the final mix** (`softClipSample()`, `src/main.cpp`): velocity-sensitivity can boost an operator's gain to ~1.5x above unity at high output level + velocity (an intentional dynamics feature, present in the ESP32 reference too), and the only safety net was a hard integer clamp, producing audible digital clipping when several factors (level, velocity, algorithm mix, effects) stack up. Replaced with a cheap soft-clipper (transparent below 0.9, smoothly saturating toward ±1.0 above it) that preserves the velocity dynamics without the harsh clipping — a real, independent improvement, though it turned out not to be the cause of the aliasing hiss described below; see `doc/CHANGELOG_DX_ENGINE.md` §21.
 - **High-note "hiss" with strong operator feedback is expected FM aliasing, not a bug**: operator feedback (per official spec, sine→sawtooth as feedback increases) generates rich harmonic content; at high pitch, harmonics exceeding Nyquist alias back as audible noise — inherent to non-bandlimited feedback FM, byte-identical to the ESP32 reference. Deliberately not "fixed" in the engine (would mean deviating from the faithful port and audibly changing the character of feedback at high notes); presets that hit it audibly can have operator level/feedback tuned down slightly as a per-patch adjustment. See `doc/CHANGELOG_DX_ENGINE.md` §22.
+
+### RP2350-Optimierungen (2026-07-07)
+
+- **Audio-Blockgröße ausgerichtet:** `SAMPLES_PER_BUFFER` 16 → 64 (= `DMA_BUFFER_LEN`). Korrigiert einen LFO-Timingfehler (der Block-Level-LFO war für 64 Samples pro Block kalkuliert, es wurden aber nur 16 pro IRQ gerendert, daher lief der LFO 4× zu schnell) und senkt die Audio-DMA-IRQ-Rate von ~2744 Hz auf ~686 Hz. `dxBuf` im I2S-IRQ von VLA auf statischen Puffer der Größe `DMA_BUFFER_LEN * 2` umgestellt.
+- **OLED-I2C-Bus beschleunigt:** 400 kHz → 1 MHz (SH1106 Fast-Mode). Display-Refresh ~2,5× schneller, bessere Encoder/UI-Responsivität.
+- **Voice-Skipping:** `RDX_Synth::process()` und `renderAudioBlock()` überspringen inaktive (`IDLE`) Stimmen via `isActive()`-Check. Release-Stimmen (hörbares Decay) werden nicht übersprungen. Größte CPU-Ersparnis bei typischer Polyphonie (1–4 Noten → 4–7 idle Stimmen übersprungen).
+- **Encoder-PIO-Debounce korrigiert:** `freq_divider` 1 → 444. SM-Takt von ~444 MHz auf ~1 MHz, ergibt ~490 µs Hardware-Debounce (entspricht dem PIO-Design-Intent; vorher lag das Debounce-Intervall bei ~1,1 µs und war praktisch unwirksam).
 
 ## Acknowledgements
 

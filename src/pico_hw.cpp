@@ -33,7 +33,8 @@ uint8_t u8x8_byte_pico_hw_i2c(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *
         }
         break;
     case U8X8_MSG_BYTE_INIT:
-        i2c_init(i2c1, 400*1000);
+        // SH1106 supports Fast Mode up to 1 MHz for faster display refresh
+        i2c_init(i2c1, 1000 * 1000);
         gpio_set_function(PIN_OLED_SDA, GPIO_FUNC_I2C);
         gpio_set_function(PIN_OLED_SCL, GPIO_FUNC_I2C);
         gpio_pull_up(PIN_OLED_SDA);

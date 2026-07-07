@@ -42,6 +42,7 @@ public:
         float mix = 0.f;
         const float outGain = outputGain_;
         for (int i = 0; i < MAX_VOICES; i++) {
+                if (!voices_[i].isActive()) continue; // skip idle voices — re-synced on noteOn via syncLFO()
                 mix += voices_[i].step() * outGain;
         }
         return mix;
@@ -49,7 +50,10 @@ public:
 
     void __attribute__((always_inline, hot)) RAM_HOT(renderAudioBlock)(float* outL, float* outR, uint32_t len = DMA_BUFFER_LEN) {
         float sample = 0.f;
-        for (int i = 0; i < MAX_VOICES; i++) { voices_[i].updateLfo(); }
+        for (int i = 0; i < MAX_VOICES; i++) {
+            if (!voices_[i].isActive()) continue; // skip idle voices — re-synced on noteOn via syncLFO()
+            voices_[i].updateLfo();
+        }
         for (uint32_t i = 0; i < len; ++i) {
             sample = process();
             outL[i] = sample;

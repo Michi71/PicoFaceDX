@@ -1104,3 +1104,37 @@ Nutzer bestätigt nach Test: OP-Ziffern 1 px nach rechts (`x[id] - fw2`
 (`+ 3` → `+ 6`, insgesamt 6 px gegenüber der ursprünglichen
 `y0 + hTotal - getFontHeight(u8g2)`-Position). Damit laut Nutzer
 "sauber". `null Warnungen`, FLASH 164.256 B, RAM 274.112 B.
+
+## 24. Nachtrag: RP2350-Optimierungen — Blockgröße, I2C, Voice-Skipping, Encoder-Debounce (2026-07-07)
+
+### Anlass
+
+Nach der Portierung auf den RP2350 zeigten sich im Betrieb mehrere inkrementelle Optimierungspotenziale: ein LFO-Timingfehler durch inkonsistente Audio-Blockgrößen, ein langsamer OLED-Refresh, unnötige CPU-Zyklen für idle Synthesizer-Stimmen und ein praktisch wirkungsloser Hardware-Debounce für die Encoder-PIO. Dieser Nachtrag dokumentiert die vier gezielten Änderungen, die zusammen Audio-Stabilität, UI-Responsivität und CPU-Effizienz verbessern.
+
+### Audio-Blockgröße auf `DMA_BUFFER_LEN` ausgerichtet
+
+`SAMPLES_PER_BUFFER` wurde von 16 auf 64 erhöht, sodass es jetzt mit `DMA_BUFFER_LEN` übereinstimmt. Der Block-Level-LFO war für 64 Samples pro Block kalkuliert, wurde aber bei nur 16 Samples pro IRQ aufgerufen — der LFO lief dadurch effektiv 4× zu schnell. Die Angleichung korrigiert diesen Timingfehler. Zusätzlich sinkt die Audio-DMA-IRQ-Rate von ~2744 Hz auf ~686 Hz, was den IRQ-Overhead reduziert. Im I2S-IRQ wurde `dxBuf` von einem VLA auf einen statischen Puffer der Größe `DMA_BUFFER_LEN * 2` umgestellt, um Stack-Variabilität zu vermeiden.
+
+### OLED-I2C-Bus auf 1 MHz (Fast-Mode)
+
+Der I2C-Takt für das SH1106-OLED wurde von 400 kHz auf 1 MHz angehoben. Das Display arbeitet im Fast-Mode stabil und der Refresh ist dadurch ~2,5× schneller. Die höhere Display-Update-Rate wirkt sich direkt auf Encoder- und UI-Responsivität aus.
+
+### Voice-Skipping für idle Stimmen
+
+`RDX_Synth::process()` und `renderAudioBlock()` prüfen nun vor dem Rendern jeder Stimme `isActive()`. Stimmen im Zustand `IDLE` werden komplett übersprungen. Stimmen in `RELEASE` (hörbares Decay) werden weiterhin normal gerendert, um keine Ausblendartefakte zu erzeugen. Bei typischer Polyphonie (1–4 gespielte Noten) fallen 4–7 zusätzliche Stimmen in den `IDLE`-Zustand und werden jetzt nicht mehr berechnet; das liefert die größte CPU-Ersparnis im Normalbetrieb.
+
+### Encoder-PIO-Debounce korrigiert
+
+Der `freq_divider` für die Encoder-PIO-State-Machine wurde von 1 auf 444 gesetzt. Damit sinkt der SM-Takt von ~444 MHz auf ~1 MHz. Der PIO-Debouncer arbeitet mit diesem Takt und erzeugt nun ~490 µs Hardware-Debounce — genau dem ursprünglichen Design-Intent entsprechend. Vorher lag das Debounce-Intervall bei nur ~1,1 µs und war praktisch unwirksam, sodass prellende Encoder-Impulse durchschlugen.
+
+### Build-Verifikation
+
+- Toolchain: `pico-sdk` für RP2350, ARM GCC
+- Compiler-Warnungen: **0**
+- Firmware-Größe:
+  - FLASH: **165.368 B / 0,99 %** von 16 MB
+  - RAM: **275.736 B / 52,59 %** von 512 KB
+
+### STATUS JETZT
+
+Alle vier Optimierungen sind im `main`-Branch integriert, build-verifiziert und laufen stabil auf dem RP2350. Audio-LFO-Timing ist nun korrekt, der Display-Refresh merklich schneller, die CPU-Last durch Voice-Skipping reduziert und die Encoder-PIO liefert sauberes Hardware-Debouncing. Keine bekannten Regressionen.

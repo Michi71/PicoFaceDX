@@ -10,6 +10,7 @@
 #include "midi_input_usb.h"
 #include "midi_reface.h"
 #include "DX_Synth_Bridge.h"
+#include "dx_engine/dx_engine_config.h"  // DMA_BUFFER_LEN
 #include "DX_Controller.h"
 #include "audio_subsystem.h"
 #include "pico_hw.h"
@@ -50,9 +51,9 @@ extern "C"
 //   exclusively by Core 1.
 //   Core 1 -> Core 0 communication goes through the SIO FIFO (see ipc.h).
 // ---------------------------------------------------------------------------
-Encoder encSel(pio1, 0, {PIN_SEL_CLK, PIN_SEL_DT});
-Encoder encA(pio1, 1, {PIN_PA_CLK, PIN_PA_DT});
-Encoder encB(pio1, 2, {PIN_PB_CLK, PIN_PB_DT});
+Encoder encSel(pio1, 0, {PIN_SEL_CLK, PIN_SEL_DT}, PIN_UNUSED, NORMAL_DIR, ROTARY_CPR, false, 444); // freq_divider=444 → ~1 MHz SM-Takt → ~490 µs hardware debounce (PIO design intent)
+Encoder encA(pio1, 1, {PIN_PA_CLK, PIN_PA_DT}, PIN_UNUSED, NORMAL_DIR, ROTARY_CPR, false, 444);   // freq_divider=444 → ~1 MHz SM-Takt → ~490 µs hardware debounce (PIO design intent)
+Encoder encB(pio1, 2, {PIN_PB_CLK, PIN_PB_DT}, PIN_UNUSED, NORMAL_DIR, ROTARY_CPR, false, 444);   // freq_divider=444 → ~1 MHz SM-Takt → ~490 µs hardware debounce (PIO design intent)
 PushButton btSel(PIN_SEL_SW, 50);
 PushButton btA(PIN_PA_SW, 50);
 PushButton btB(PIN_PB_SW, 50);
@@ -463,7 +464,7 @@ void __not_in_flash_func(i2s_callback_func)() {
   audio_buffer_t *buffer = take_audio_buffer(ap, false);
   if (buffer == NULL) { return; }
   int32_t *samples = (int32_t *)buffer->buffer->bytes;
-  float dxBuf[buffer->max_sample_count * 2];
+  static float dxBuf[DMA_BUFFER_LEN * 2];  // fixed-size: max_sample_count == DMA_BUFFER_LEN
   dxBridge.fill_buffer(dxBuf, buffer->max_sample_count);
   for (uint i = 0; i < buffer->max_sample_count; i++) {
       int32_t dl = (int32_t)(softClipSample(dxBuf[i * 2 + 0]) * 32767.0f);

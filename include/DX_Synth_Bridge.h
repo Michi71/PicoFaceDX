@@ -3,6 +3,8 @@
 
 #include "dx_engine/RDX_Synth.h"
 #include "dx_engine/DX_FXHost.h"
+#include <cstdint>
+#include <cmath>
 
 // DX_Synth_Bridge: Wraps the RDX_Synth FM engine for the Pico audio task.
 // NOTE: noteOn()/noteOff()/fill_buffer() are audio-rate/mutating and must only be
@@ -16,7 +18,7 @@ public:
     void init();
 
     // Main audio entry point. buffer is interleaved stereo (L,R,L,R...), length is number of frames.
-    void fill_buffer(float* buffer, int length);
+    void fill_buffer_i32(int32_t* out, int length);
 
     // Trivial forwards kept inline
     inline void noteOn(uint8_t note, uint8_t velocity) {
@@ -55,6 +57,19 @@ private:
     RDX_Synth synth_;
     DX_FXHost fxHost_;
     // Fixed scratch buffers to avoid heap allocation in the audio path
+    // Soft-clip a normalized sample to (-1, 1): transparent below 0.9,
+    // smoothly saturates toward +/-1.0 above (moved here from main.cpp;
+    // fused into fill_buffer_i32 to avoid a second output pass).
+    static inline float softClipSample(float x) {
+        constexpr float kSoftClipThreshold = 0.9f;
+        constexpr float kSoftClipRange = 1.0f - kSoftClipThreshold;
+        float ax = fabsf(x);
+        if (ax <= kSoftClipThreshold) return x;
+        float excess = ax - kSoftClipThreshold;
+        float y = kSoftClipThreshold + kSoftClipRange * (excess / (excess + kSoftClipRange));
+        return (x < 0.0f) ? -y : y;
+    }
+
     float scratchL_[DMA_BUFFER_LEN];
     float scratchR_[DMA_BUFFER_LEN];
     float cpuLoadPercent_ = 0.0f;

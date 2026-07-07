@@ -95,8 +95,9 @@ constexpr LevelLUT buildLevelLUT() {
     return lut;
 }
 
-constexpr LevelLUT levelLUT = buildLevelLUT();
-constexpr float LEVEL_LUT_MAX = levelLUT.maxValue;
+// placed in RAM (.time_critical) — read every sample in audio IRQ, avoids XIP flash-cache jitter
+inline const LevelLUT levelLUT __attribute__((section(".time_critical.levelLUT"))) = buildLevelLUT();
+constexpr float LEVEL_LUT_MAX = buildLevelLUT().maxValue;
 
 // ---- Accessors ----
 inline __attribute__((always_inline)) float RAM_HOT(rdxGain)(float level) {
@@ -247,7 +248,8 @@ constexpr int LFO_SEMITONE_LUT_ENTRIES = 256;
 constexpr int LFO_SEMITONE_LUT_CENTER = LFO_SEMITONE_LUT_ENTRIES / 2;
 
 // Precompute array
-constexpr float SEMITONE_LUT[LFO_SEMITONE_LUT_ENTRIES] = {
+// placed in RAM (.time_critical) — read every sample in audio IRQ, avoids XIP flash-cache jitter
+inline const float SEMITONE_LUT[LFO_SEMITONE_LUT_ENTRIES] __attribute__((section(".time_critical.semitone_lut"))) = {
   6.151958e-04, 6.517773e-04, 6.905340e-04, 7.315953e-04, 7.750982e-04, 8.211879e-04, 8.700183e-04, 9.217523e-04, 
   9.765625e-04, 1.034632e-03, 1.096154e-03, 1.161335e-03, 1.230392e-03, 1.303555e-03, 1.381068e-03, 1.463191e-03, 
   1.550196e-03, 1.642376e-03, 1.740037e-03, 1.843505e-03, 1.953125e-03, 2.069264e-03, 2.192309e-03, 2.322670e-03, 
@@ -329,7 +331,8 @@ constexpr auto buildTable() {
 }
 
 //constexpr auto sinTable = buildTable();
-const std::array<float, SINLUT_SIZE+1> sinTable = buildTable();
+// placed in RAM (.time_critical) — read every sample in audio IRQ, avoids XIP flash-cache jitter
+inline const std::array<float, SINLUT_SIZE+1> sinTable __attribute__((section(".time_critical.sinTable"))) = buildTable();
  
 // phase in [0..1), output [-1..1]
 inline __attribute__((always_inline)) float RAM_HOT(sin01)(float phase) {

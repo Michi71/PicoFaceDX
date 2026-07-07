@@ -177,8 +177,8 @@ ninja
 
 | Resource | Usage | Capacity |
 |---|---|---|
-| Flash | ~165 KB (~0.99%) | 16 MB |
-| RAM | ~276 KB (~52.59%) | 512 KB |
+| Flash | ~160 KB (~0.95%) | 16 MB |
+| RAM | ~283 KB (~54.04%) | 512 KB |
 
 Flash dropped from ~26% (when the CP engine's ~8 MB of instrument sample data was present) to under 1%. RAM sits at ~53% mainly due to the effects chain's fixed scratch buffers (2 slots × 96 KB, sized for the largest single effect, `FxReverb`) — budgeted deliberately, not accidental; comfortable headroom remains for stacks and other buffers.
 
@@ -281,6 +281,12 @@ Full spec: `doc/PRESETS.md`.
 - **OLED-I2C-Bus beschleunigt:** 400 kHz → 1 MHz (SH1106 Fast-Mode). Display-Refresh ~2,5× schneller, bessere Encoder/UI-Responsivität.
 - **Voice-Skipping:** `RDX_Synth::process()` und `renderAudioBlock()` überspringen inaktive (`IDLE`) Stimmen via `isActive()`-Check. Release-Stimmen (hörbares Decay) werden nicht übersprungen. Größte CPU-Ersparnis bei typischer Polyphonie (1–4 Noten → 4–7 idle Stimmen übersprungen).
 - **Encoder-PIO-Debounce korrigiert:** `freq_divider` 1 → 444. SM-Takt von ~444 MHz auf ~1 MHz, ergibt ~490 µs Hardware-Debounce (entspricht dem PIO-Design-Intent; vorher lag das Debounce-Intervall bei ~1,1 µs und war praktisch unwirksam).
+
+### RP2350-Optimierungen — Welle 2 (2026-07-07)
+
+- **A) Per-Sample-LUTs von Flash nach RAM verschoben:** `sinTable` (4,1 KB), `SEMITONE_LUT` (1 KB) und `levelLUT` (1,5 KB) werden von den RAM-residenten Audio-Funktionen (`sin01`, `semitonesToRatio`, `rdxGain`) jedes Sample gelesen. Sie lagen bisher im XIP-Flash (`.rodata`); `RAM_HOT` verschiebt nur Funktionen, nicht Daten, sodass jeder LUT-Zugriff XIP-Cache-Jitter im Audio-IRQ verursachte. Die Tabellen liegen jetzt in `.time_critical.<name>` im RAM. Storage `constexpr`→`const` (Builder bleiben `constexpr`), `inline` (C++17) + COMDAT-Folding, damit nur eine Kopie pro Tabelle im RAM landet (vorher eine pro Translation Unit).
+- **B) Audio-Ausgabepfad fusioniert:** `DX_Synth_Bridge::fill_buffer(float*)` → `fill_buffer_i32(int32_t*)`. Nach den Effekten jetzt in einem Schleifendurchlauf softClip + `float→int32` + clamp + Interleave direkt in den DMA-Ausgabepuffer. Entfernt das statische `dxBuf` (512 B RAM) und einen ganzen Vollblock-Durchlauf. `softClipSample` von `main.cpp` als `private static inline` in `DX_Synth_Bridge` verlagert.
+- **C) `semitonesToRatio`-Fast-Path in `RDX_Operator::compute()`:** bei `phaseModSemitones == 0.0f` (häufiger Idle-Fall ohne Pitch-Bend/Portamento/LFO-PM/PEG) wird `phase_ += phaseInc_` statt LUT-Lookup + Multiplikation gerechnet. Semantisch identisch, da `semitonesToRatio(0) == 1.0` exakt.
 
 ## Acknowledgements
 

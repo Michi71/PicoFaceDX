@@ -444,36 +444,13 @@ int main(void) {
 // ===========================================================================
 // I2S callback (Core 0, DMA-IRQ context): drain FIFO, then render one block
 // ===========================================================================
-// Soft-clip a normalized sample to (-1, 1): transparent below the threshold
-// (the common case costs one comparison), smoothly saturates toward +/-1.0
-// above it instead of the harsh digital clipping a hard clamp produces when
-// velocity-boosted operator gain (RDX_Operator::setParams(), up to ~1.5x at
-// max outLevel + velocity) pushes the mix over full scale.
-static inline float softClipSample(float x) {
-    constexpr float kSoftClipThreshold = 0.9f;
-    constexpr float kSoftClipRange = 1.0f - kSoftClipThreshold;
-    float ax = fabsf(x);
-    if (ax <= kSoftClipThreshold) return x;
-    float excess = ax - kSoftClipThreshold;
-    float y = kSoftClipThreshold + kSoftClipRange * (excess / (excess + kSoftClipRange));
-    return (x < 0.0f) ? -y : y;
-}
-
+// Soft-clip is now fused into DX_Synth_Bridge::fill_buffer_i32() (one pass).
 void __not_in_flash_func(i2s_callback_func)() {
   while (multicore_fifo_rvalid()) { ipc_apply(multicore_fifo_pop_blocking()); }
   audio_buffer_t *buffer = take_audio_buffer(ap, false);
   if (buffer == NULL) { return; }
   int32_t *samples = (int32_t *)buffer->buffer->bytes;
-  static float dxBuf[DMA_BUFFER_LEN * 2];  // fixed-size: max_sample_count == DMA_BUFFER_LEN
-  dxBridge.fill_buffer(dxBuf, buffer->max_sample_count);
-  for (uint i = 0; i < buffer->max_sample_count; i++) {
-      int32_t dl = (int32_t)(softClipSample(dxBuf[i * 2 + 0]) * 32767.0f);
-      int32_t dr = (int32_t)(softClipSample(dxBuf[i * 2 + 1]) * 32767.0f);
-      if (dl < -32768) dl = -32768; else if (dl > 32767) dl = 32767;
-      if (dr < -32768) dr = -32768; else if (dr > 32767) dr = 32767;
-      samples[i * 2 + 0] = dl << 16;
-      samples[i * 2 + 1] = dr << 16;
-  }
+  dxBridge.fill_buffer_i32(samples, buffer->max_sample_count);
   buffer->sample_count = buffer->max_sample_count;
   give_audio_buffer(ap, buffer);
   return;

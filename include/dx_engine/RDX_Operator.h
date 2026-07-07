@@ -46,7 +46,10 @@ public:
         if (params_.fbType && fbAcc_ < 0.f) fbAcc_ = -fbAcc_;
         fbFilter_ += fbLpCoef_ * (fbAcc_ - fbFilter_);
         float lookupPhase = wrap01(phase_ + inputPhaseOffset + fbFilter_ * fbScale_ );
-        phase_ = (phase_ + phaseInc_ * semitonesToRatio(phaseModSemitones));
+        if (phaseModSemitones != 0.0f)
+            phase_ += phaseInc_ * semitonesToRatio(phaseModSemitones);
+        else
+            phase_ += phaseInc_;
         if(phase_>1.0f) phase_ -= 1.0f;
         fbAcc_  = sin01(lookupPhase);
         return fbAcc_ * outGain_ * env_.processAEG();

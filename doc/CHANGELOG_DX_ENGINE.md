@@ -1138,3 +1138,43 @@ Der `freq_divider` für die Encoder-PIO-State-Machine wurde von 1 auf 444 gesetz
 ### STATUS JETZT
 
 Alle vier Optimierungen sind im `main`-Branch integriert, build-verifiziert und laufen stabil auf dem RP2350. Audio-LFO-Timing ist nun korrekt, der Display-Refresh merklich schneller, die CPU-Last durch Voice-Skipping reduziert und die Encoder-PIO liefert sauberes Hardware-Debouncing. Keine bekannten Regressionen.
+
+## 25. Nachtrag: RP2350-Optimierungen Welle 2 — LUTs nach RAM, Ausgabepfad fusioniert, semitonesToRatio-Fast-Path (2026-07-07)
+
+### Anlass
+
+Die erste Optimierungswelle (§24) brachte die Audio-Funktionen mit `RAM_HOT` in den SRAM, ließ aber die von diesen Funktionen pro Sample gelesenen Lookup-Tabellen im XIP-Flash. Jeder Zugriff auf `sinTable`, `SEMITONE_LUT` und `levelLUT` lief daher über den XIP-Cache und konnte im Audio-IRQ Jitter erzeugen. Zudem waren die LUTs als `constexpr` deklariert, sodass der Linker pro Translation Unit eine separate Kopie im Flash anlegte. Welle 2 beseitigt beide Probleme, fusioniert den Ausgabepfad und fügt einen semantisch identischen Fast-Path hinzu.
+
+### A) Per-Sample-LUTs in `.time_critical`-RAM-Section verschoben
+
+- Tabellen: `sinTable` (~4,1 KB), `SEMITONE_LUT` (~1 KB), `levelLUT` (~1,5 KB).
+- Platzierung via `__attribute__((section(".time_critical.<name>")))`.
+- Storage-Variablen von `constexpr` auf `const` geändert; die Builder-Funktionen bleiben `constexpr`.
+- Mit `inline` (C++17) + COMDAT-Folding wird sichergestellt, dass pro Tabelle nur eine einzige Kopie im RAM landet.
+- `LEVEL_LUT_MAX` vom platzierten Storage entkoppelt: `= buildLevelLUT().maxValue`.
+
+Root-Cause: `RAM_HOT` verschiebt nur Funktionen, nicht Daten. Daten im Flash erzeugen XIP-Cache-Miss-Jitter im Audio-IRQ.
+
+### B) Audio-Ausgabepfad fusioniert
+
+- `DX_Synth_Bridge::fill_buffer(float*)` → `fill_buffer_i32(int32_t*)`.
+- Soft-Clip, `float→int32`, Clamp und Interleave werden nach den Effekten in einem einzigen Schleifendurchlauf direkt in den DMA-Ausgabepuffer geschrieben.
+- Der statische `dxBuf` (512 B RAM) und ein separater Vollblock-Durchlauf entfallen.
+- `softClipSample` aus `main.cpp` als `private static inline` Methode in `DX_Synth_Bridge` verlagert.
+
+### C) `semitonesToRatio`-Fast-Path in `RDX_Operator::compute()`
+
+- Wenn `phaseModSemitones == 0.0f` (kein Pitch-Bend, Portamento, LFO-PM oder PEG — häufiger Idle-Fall) wird direkt `phase_ += phaseInc_` berechnet, statt `semitonesToRatio()` + Multiplikation aufzurufen.
+- Semantisch identisch, da `semitonesToRatio(0) == 1.0` exakt.
+
+### Build-Verifikation
+
+- Compiler: null Warnungen.
+- Footprint:
+  - **Flash:** 160.160 B / 0,95 %
+  - **RAM:** 283.344 B / 54,04 %
+- Hinweis zum Flash-Wert: Gegenüber §24 ist der Flash-Verbrauch gesunken, weil COMDAT-Folding die zuvor mehrfach im Flash vorliegenden LUT-Kopien auf jeweils eine einzige Kopie reduzierte.
+
+### STATUS JETZT
+
+Alle Änderungen sind gebaut, warnungsfrei verifiziert und im `main`-Branch zusammengeführt. Der Audio-IRQ hat jetzt keine XIP-Flash-Lesevorgänge mehr im Per-Sample-Pfad; der Ausgabepfad arbeitet mit einem Durchlauf weniger. Die Engine ist bereit für weitere Funktionsarbeit.

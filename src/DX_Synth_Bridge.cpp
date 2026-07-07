@@ -8,7 +8,7 @@ void DX_Synth_Bridge::init() {
     synth_.applyPatch(synth_.DigiChordPatch());
 }
 
-void RAM_HOT(DX_Synth_Bridge::fill_buffer)(float* buffer, int length) {
+void RAM_HOT(DX_Synth_Bridge::fill_buffer_i32)(int32_t* out, int length) {
     uint32_t t0 = time_us_32();
     // Refresh cached parameters once per block
     synth_.updateCache();
@@ -27,11 +27,17 @@ void RAM_HOT(DX_Synth_Bridge::fill_buffer)(float* buffer, int length) {
         // Post-mix effects (2 slots: Thru/Distortion/Touch Wah/Chorus/Flanger/Phaser/Delay/Reverb)
         fxHost_.process(scratchL_, scratchR_, chunkLen);
 
-        // Interleave planar data into the output buffer
+        // Fused pass: soft-clip + float->int32 + clamp + interleave directly
+        // into the DMA output buffer (replaces the old planar->dxBuf copy
+        // followed by a separate convert loop in the ISR).
         int offset = framesRendered * 2;
         for (int i = 0; i < chunkLen; ++i) {
-            buffer[offset + (2 * i)]     = scratchL_[i];
-            buffer[offset + (2 * i) + 1] = scratchR_[i];
+            int32_t dl = (int32_t)(softClipSample(scratchL_[i]) * 32767.0f);
+            int32_t dr = (int32_t)(softClipSample(scratchR_[i]) * 32767.0f);
+            if (dl < -32768) dl = -32768; else if (dl > 32767) dl = 32767;
+            if (dr < -32768) dr = -32768; else if (dr > 32767) dr = 32767;
+            out[offset + (2 * i)]     = dl << 16;
+            out[offset + (2 * i) + 1] = dr << 16;
         }
 
         framesRendered += chunkLen;

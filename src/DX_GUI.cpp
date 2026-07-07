@@ -37,7 +37,7 @@ void drawAlgo(u8g2_t* u8g2, int y0, uint8_t algo_id, int hTotal, bool showId) {
     if (compact) { y[i] = yy ; } else { y[i] = yy - (OP_PX + vLink) * offsets[algo_id][i] ; }
   }
   for (uint8_t id = 0 ; id < 4 ; id++) {
-    drawChar(u8g2, x[id] - fw2, y[id] - fh2, static_cast<char>(id + '1'));
+    drawChar(u8g2, x[id] - fw2 + 1, y[id] + fh2, static_cast<char>(id + '1'));
     if (carriers[algo_id][id]) {
       maxCarrier = id;
       drawRect(u8g2, x[id] - ww, y[id] - ww, OP_PX, OP_PX);
@@ -48,7 +48,7 @@ void drawAlgo(u8g2_t* u8g2, int y0, uint8_t algo_id, int hTotal, bool showId) {
   if (showId) {
     int offset = algo_id>=9 ? getFontWidth(u8g2) : fw2;
     char idBuf[4]; snprintf(idBuf, sizeof(idBuf), "%d", algo_id + 1);
-    drawText(u8g2, x[0] + (x[maxCarrier] - x[0]) / 2 - offset, y0 + hTotal - getFontHeight(u8g2), idBuf);
+    drawText(u8g2, x[0] + (x[maxCarrier] - x[0]) / 2 - offset, y0 + hTotal - getFontHeight(u8g2) + 6, idBuf);
   }
   switch(algo_id){
     case 0:

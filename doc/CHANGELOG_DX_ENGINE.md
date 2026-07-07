@@ -912,3 +912,195 @@ CPU-Last-Instrumentierung erfasst nur `fill_buffer()` selbst, nicht die
 Zeit für `ipc_apply()`-Aufrufe wie `noteOn()` davor, die bei einem
 Ausbruch mehrerer Noten in kurzer Zeit ebenfalls ins Budget schneiden
 könnten).
+
+---
+
+## 21. Nachtrag: Soft-Limiter gegen Clipping-Zischen (2026-07-07)
+
+**Anlass:** Dritter Hardware-Test nach §20: Peak auf 96 % gesunken (FTZ-Fix
+wirkt), aber das Zischen blieb bestehen — jetzt konkret beschrieben als
+"besonders im hohen Notenbereich". Erste Vermutung (Aliasing durch
+Sägezahn-Feedback bei hoher Tonhöhe) wurde gegen das ESP32-Original und
+das offizielle Referenzhandbuch geprüft: FB ist laut Doku (S. 4) real
+pro Operator einstellbar (-127 bis +127, Sinus↔Sägezahn/Rechteck), also
+kein Bug in unserem Datenmodell. Der Nutzer fand dann experimentell:
+Absenken von OP1/OP3-Level bei "MotionPad" von 127 auf 121 beseitigt das
+Zischen fast vollständig, ohne hörbaren Klangunterschied — ein Hinweis,
+der eher zu einem Schwellenwert-Effekt (Clipping) als zu graduellem
+Aliasing passt.
+
+### Root Cause
+
+`RDX_Operator::setParams()` berechnet `outGain_ = rdxGain(params_.outLevel
+* velogain_) * scaling_`. `velogain_` (Velocity-Sensitivity) kann bis
+**1,08×** erreichen (`velocityGain(vel, sens, 1.08f)`, `VELO_SENS[127] =
+1.0`). Bei `outLevel=127` ergibt das eine Abfrage der Gain-LUT
+(`rdxGain()`, `RDX_Constants.h`) bei Index ≈137 — die LUT ist mit 192
+statt 128 Einträgen absichtlich über den nominalen 0–127-Bereich hinaus
+definiert und liefert dort **~1,5× statt 1,0×** Gain. Bestätigt identisch
+im ESP32-Original vorhanden (`velocityGain(..., 1.08f)`, exakt derselbe
+Wert) — also eine bewusste, portierte Velocity-Dynamik-Funktion, kein
+Portierungsfehler.
+
+Das einzige Sicherheitsnetz dagegen war ein **harter Integer-Clip**
+(`main.cpp`, `if (dl > 32767) dl = 32767;`). Sobald Operator-Gain-
+Überschwingen + 3-Operator-Mix (Algorithmus 8) + Effektkette die
+Vollaussteuerung überschreiten, erzeugt der harte Clip echtes digitales
+Clipping — ein Schwellenwert-Effekt, der zur Beobachtung des Nutzers
+passt (kleine Level-Reduktion knapp unter die Clipping-Schwelle
+gebracht, nicht linear leiser gemacht).
+
+### Fix
+
+`main.cpp`: neue `softClipSample()`-Hilfsfunktion vor
+`i2s_callback_func()` — transparent (Identität) unterhalb 0,9,
+darüber sanfte Sättigung Richtung ±1,0 (`threshold + range * (excess /
+(excess + range))`, asymptotisch, nie exakt erreicht). Ersetzt die
+Roh-Sample-Werte vor der 16-Bit-Wandlung; der alte harte Clamp bleibt
+als billiges Sicherheitsnetz für Restfälle (Float-Rundung) bestehen,
+ist aber nicht mehr der primäre Begrenzer. Günstig: der Normalfall
+(kein Clipping) kostet nur einen Vergleich, die teurere Rechnung
+(Division) läuft nur für die seltenen Sample, die tatsächlich über die
+Schwelle kommen.
+
+Bewusst **kein** Cap der Operator-Level in einzelnen Presets (Alternative,
+vom Nutzer vorgeschlagen): das hätte nur "MotionPad" repariert, nicht
+den Mechanismus — jedes andere Preset mit hohem Level + kräftigem
+Anschlag hätte dasselbe Risiko behalten. Der Soft-Limiter fängt es
+generell ab, ohne die absichtliche Velocity-Dynamik zu beschneiden.
+
+### Build-Verifikation
+
+Vollständiger Rebuild: **null Warnungen**. FLASH 164.248 B / 16 MB ≈
+0,98 %, RAM 274.112 B / 512 KB ≈ 52,28 % (+176 B Flash, +176 B RAM
+gegenüber §20).
+
+### STATUS JETZT
+
+Fix angewandt und Build verifiziert; die Bestätigung (Zischen sollte bei
+erneutem Test mit "MotionPad" bei hohem Notenbereich + kräftigem
+Anschlag verschwinden, ohne dass die Level-Werte zurückgesetzt werden
+müssen) kann nur der Nutzer auf echter Hardware durchführen.
+
+---
+
+## 22. Nachtrag: Zischen bei "MotionPad" als Aliasing bestätigt, bewusst nicht "gefixt" (2026-07-07)
+
+**Anlass:** Vierter Hardware-Test nach §21: der Soft-Limiter aus §21
+hatte **keine Wirkung** auf das Zischen — einzig das manuelle Absenken
+von OP1/OP3-Level (127→121, vom Nutzer in §19/§20 empirisch gefunden)
+hilft weiterhin.
+
+### Einordnung
+
+Dass der Soft-Limiter (wirkt nur auf die Gesamtamplitude am Mixdown-Ende)
+keine Wirkung zeigt, schließt Clipping als Ursache aus — die in §21
+aufgestellte Gain-Überschwing-/Clipping-These war damit falsch. Das
+bestätigt stattdessen die ursprüngliche, in §19 zuerst untersuchte
+Aliasing-These: OP1 und OP3 (intern Operator 0 und 2) sind bei
+"MotionPad" genau die beiden Operatoren mit nennenswertem Eigen-Feedback
+(55 bzw. 56 von 127) — laut offiziellem Referenzhandbuch (S. 4) macht
+Feedback die Wellenform sinus→sägezahnartig, was viel Oberton-Energie
+erzeugt. `outLevel` skaliert dabei nur den **Beitrag des Operators zum
+Mix**, nicht die interne Feedback-Stärke (die verwendet den rohen,
+unskalierten `fbAcc_`-Wert vor der Level-Skalierung) — das Absenken auf
+121 senkt also nicht die Alias-Erzeugung an der Quelle, sondern macht den
+bereits erzeugten Alias-Anteil im Mix leiser/maskierter, bis er unter die
+Hörschwelle rutscht.
+
+### Entscheidung
+
+Nach Rücksprache mit dem Nutzer: **kein Eingriff in den Feedback-/
+Oszillator-Pfad.** Begründung: das exakt gleiche Verhalten ist
+byte-identisch im ESP32-Referenzprojekt vorhanden (§19 bereits verifiziert);
+ein Fix (z. B. tonhöhenabhängige Feedback-Dämpfung) wäre eine echte
+Abweichung von der originalgetreuen Portierung, würde den Klangcharakter
+bei hohen Noten mit Feedback verändern, zusätzliche Rechenzeit kosten,
+und ist ohne Vergleich mit echter Hardware nicht sicher als "Fehler" statt
+"Charakter der echten Hardware" einzustufen. Presets, die bei bestimmten
+Noten/Anschlagsstärken hörbar zischen, können bei Bedarf weiterhin manuell
+(Operator-Level oder Feedback leicht reduzieren) angepasst werden — wie
+vom Nutzer bereits für "MotionPad" demonstriert.
+
+Der Soft-Limiter aus §21 bleibt unverändert im Code: er behebt zwar nicht
+dieses Zischen, adressiert aber weiterhin ein reales, unabhängiges Risiko
+(hartes digitales Clipping bei Velocity-Gain-Überschwingen kombiniert mit
+Algorithmus-Mix), das gesondert von diesem Aliasing-Effekt besteht.
+
+### STATUS JETZT
+
+Kein weiterer Code-Fix für dieses Verhalten. Als bekannte, akzeptierte
+Eigenschaft dokumentiert (Aliasing durch nicht-bandbegrenztes
+Feedback-FM bei hoher Tonhöhe, identisch zum ESP32-Original). Betroffene
+Presets können individuell per Level-/Feedback-Anpassung angepasst
+werden, ohne dass das die Engine selbst verändert.
+
+---
+
+## 23. Nachtrag: Algo-Diagramm-Labels überlappen die Grafik (2026-07-07)
+
+**Anlass:** Nutzer meldet auf echter Hardware: die Operator-Nummern
+(1–4) und die Algorithmus-Nummer im Algo-Diagramm (`ALGO`-Seite)
+überlappen sichtbar mit den Operator-Boxen/-Kreisen.
+
+### Root Cause
+
+`drawAlgo()` (`src/DX_GUI.cpp`) ist byte-identisch zur Zeichenformel des
+ESP32-Referenzprojekts (`RDX_Algos.h`/`UI_Algos.h`) — Operator-Ziffer bei
+`y[id] - fh2` (Font-Höhen-basiert), Algo-ID-Text bei `y0 + hTotal -
+getFontHeight()`. Der Unterschied liegt am **Aufrufort**: das
+ESP32-Original ruft `drawAlgo(display, 29, algo_id, 35, true)` auf,
+unser Port `drawAlgo(u8g2, 20, ..., 40, true)` (andere `y0`/`hTotal` für
+das SH1106 128×64-Display) — die im Original passenden Ränder reichen
+bei unseren Werten nicht mehr aus.
+
+### Fix
+
+- Operator-Ziffer-Position von `y[id] - fh2` (Font-Höhen-basiert) auf
+  `y[id] - ww - 2` geändert — orientiert sich jetzt an der tatsächlichen
+  halben Boxgröße (`ww = OP_PX/2`) statt an einer unabhängigen
+  Font-Metrik, plus 2 px Extra-Abstand.
+- Algo-ID-Text-Position von `y0 + hTotal - getFontHeight(u8g2)` auf
+  `y0 + hTotal - getFontHeight(u8g2) + 3` geändert — 3 px weiter nach
+  unten, mehr Abstand zur untersten Operator-Reihe.
+- Nicht mehr benötigte Variable `fh2` entfernt (sonst
+  `-Wunused-variable`).
+
+### Build-Verifikation
+
+Vollständiger Rebuild: **null Warnungen**. FLASH 164.232 B / 16 MB ≈
+0,98 %, RAM 274.112 B / 512 KB ≈ 52,28 % (minimale Änderung).
+
+### STATUS JETZT
+
+Fix angewandt, Build verifiziert. Da ich keine visuelle
+Hardware-Verifikation durchführen kann, sind die exakten Pixel-Werte
+(-2 px bzw. +3 px) eine erste, gut begründete Schätzung — Bestätigung
+und ggf. Feinjustierung stehen noch aus (Nutzer-Test auf echtem
+SH1106-Display).
+
+### Nachtrag zu §23: OP-Nummern innerhalb der Box statt darüber
+
+Rückmeldung nach Hardware-Test von §23: Positionierung "über der Box"
+funktionierte, sieht aber unschöner aus, weil Verbindungslinien
+zwischen Operatoren durch die Ziffern laufen. Grund: Verbindungslinien
+erreichen jeweils nur den Rand einer Box (horizontale Linien beginnen
+bei `x[id]+ww`, vertikale Verbindungsstücke reichen nur `ww` Pixel an
+eine Box heran), nie deren Zentrum — eine Ziffer, die im Boxzentrum
+(`y[id]`) sitzt, wird also nie von einer Linie gekreuzt, eine Ziffer im
+Zwischenraum zwischen zwei Reihen (wo vertikale Verbindungsstücke
+verlaufen) hingegen schon.
+
+**Fix:** `fh2` (Font-Höhe/2) wiederhergestellt, Ziffer-Y-Koordinate von
+`y[id] - ww - 2` auf `y[id] + fh2` geändert — zentriert die Ziffer
+(bei Baseline-Textpositionierung) ungefähr im Zentrum der eigenen Box
+statt darüber. `null Warnungen`, FLASH 164.248 B, RAM 274.112 B
+(unverändert gegenüber §23).
+
+### Finale Feinjustierung, auf Hardware bestätigt
+
+Nutzer bestätigt nach Test: OP-Ziffern 1 px nach rechts (`x[id] - fw2`
+→ `x[id] - fw2 + 1`), Algo-Nummer 3 px weiter nach unten als zuvor
+(`+ 3` → `+ 6`, insgesamt 6 px gegenüber der ursprünglichen
+`y0 + hTotal - getFontHeight(u8g2)`-Position). Damit laut Nutzer
+"sauber". `null Warnungen`, FLASH 164.256 B, RAM 274.112 B.

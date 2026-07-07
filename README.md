@@ -2,8 +2,6 @@
 
 A Yamaha reface DX FM-synth clone for the RP2350. PicoFaceDX is the sibling project of PicoFaceCP, sharing the same hardware base (SparkFun Pro Micro RP2350 board, I2S DAC output, SH1106 128×64 OLED, 3 rotary encoders) but replacing the CP's sample-based piano engine entirely with a 4-operator, 12-algorithm FM synthesis engine.
 
-> No DX-branded hero image exists yet — the old `img/picofacecp.png` was reface-CP-branded hardware photography and has been omitted to avoid a mismatched photo. New DX-branded photography and faceplate art are a separate future task; the old `doc/PicoFaceCP Frontplatte Design/` faceplate design files were left untouched pending a decision and are out of scope for this firmware cleanup.
-
 ## Features
 
 | Area | Details |
@@ -270,10 +268,12 @@ Full spec: `doc/PRESETS.md`.
 - **Virtual EEPROM flash-park IPC handshake** for safe multicore flash writes — same mechanism as before, only the persisted payload struct changed.
 - **CPU load instrumentation**: `DX_Synth_Bridge::fill_buffer()` times itself against its real-time budget (`time_us_32()`) and exposes current/peak percentages, readable from the System menu's "CPU Load" screen. This is measurement infrastructure, not a substitute for an actual on-hardware load test with all 8 voices and both effect slots active — that number can only be read by flashing real hardware.
 - **FPU flush-to-zero enabled at boot** (`pico_init()`, `src/pico_hw.cpp`): found via a real on-hardware load test showing hissing/jitter during fast note changes — the operator feedback low-pass filter (and other IIR state in the effects chain) decays into the subnormal float range on every voice release, and the Cortex-M33 FPU's software denormal path is far slower than normal, occasionally blowing the audio IRQ's time budget. Set via inline VMRS/VMSR assembly (the SDK's CMSIS core headers aren't reachable from this build's include path); see `doc/CHANGELOG_DX_ENGINE.md` §20.
+- **Soft-clip limiter on the final mix** (`softClipSample()`, `src/main.cpp`): velocity-sensitivity can boost an operator's gain to ~1.5x above unity at high output level + velocity (an intentional dynamics feature, present in the ESP32 reference too), and the only safety net was a hard integer clamp, producing audible digital clipping when several factors (level, velocity, algorithm mix, effects) stack up. Replaced with a cheap soft-clipper (transparent below 0.9, smoothly saturating toward ±1.0 above it) that preserves the velocity dynamics without the harsh clipping — a real, independent improvement, though it turned out not to be the cause of the aliasing hiss described below; see `doc/CHANGELOG_DX_ENGINE.md` §21.
+- **High-note "hiss" with strong operator feedback is expected FM aliasing, not a bug**: operator feedback (per official spec, sine→sawtooth as feedback increases) generates rich harmonic content; at high pitch, harmonics exceeding Nyquist alias back as audible noise — inherent to non-bandlimited feedback FM, byte-identical to the ESP32 reference. Deliberately not "fixed" in the engine (would mean deviating from the faithful port and audibly changing the character of feedback at high notes); presets that hit it audibly can have operator level/feedback tuned down slightly as a per-patch adjustment. See `doc/CHANGELOG_DX_ENGINE.md` §22.
 
 ## Acknowledgements
 
-The FM engine was ported from the open ESP32/Arduino reface DX emulation project (`tools/refacedx/RDX-Reface-DX-emu`) — credit to the RDX ESP32 reface DX emulation project as the FM engine source.
+The FM engine was ported from the open ESP32/Arduino reface DX emulation project (`https://github.com/copych/RDX-Reface-DX-emu.git`) — credit to the RDX ESP32 reface DX emulation project as the FM engine source.
 
 Code for the DX port was developed with an LLM-assisted workflow: architecture and review by the maintainer, code generation via glm-5.2, matching the existing project convention.
 

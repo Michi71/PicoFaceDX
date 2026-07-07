@@ -1,5 +1,9 @@
 # PicoFaceDX
 
+<p align="center">
+  <img src="img/picofacedx.png" alt="PicoFaceDX prototype hardware" width="800">
+</p>
+
 A Yamaha reface DX FM-synth clone for the RP2350. PicoFaceDX is the sibling project of PicoFaceCP, sharing the same hardware base (SparkFun Pro Micro RP2350 board, I2S DAC output, SH1106 128×64 OLED, 3 rotary encoders) but replacing the CP's sample-based piano engine entirely with a 4-operator, 12-algorithm FM synthesis engine.
 
 ## Features

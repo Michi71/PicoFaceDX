@@ -680,3 +680,69 @@ allen Projektdateien. FLASH 163.760 B / 16 MB ≈ 0,98 %, RAM 273.912 B /
 512 KB ≈ 52,24 % — leicht kleiner als vor der Bereinigung (u. a. durch den
 Wegfall des `fast_floorf`-UB-Pfads in `misc.h`, das praktisch überall
 eingebunden wird).
+
+---
+
+## 18. Nachtrag: Zwei Restpunkte aus der Gap-Analyse (2026-07-07)
+
+**Anlass:** Nutzerfrage „ist noch irgendwas offen zum 100 %-Clone?" ergab
+eine erneute Durchsicht gegen Data List/Reference Manual/Codebasis. Dabei
+zwei kleine, klar abgegrenzte Punkte identifiziert und auf Wunsch behoben
+(kein Klang-/Protokoll-Gap, reine Code-Hygiene bzw. Anzeige-Politur).
+
+### Toter Code entfernt: `RDX_Synth::programChange()` / `applyBankProgram()`
+
+Grep über den gesamten Quellbaum bestätigte: beide Methoden wurden
+nirgends aufgerufen. Der echte Program-Change-Pfad läuft seit Phase B
+vollständig über `midi_reface.cpp::onProgramChange()` →
+`presets.cpp` → `IPC_CMD_DX_PATCH_APPLY` → `preset_apply()` — die
+`RDX_Synth`-eigene Methode war ein Überbleibsel von vor Phase B und ihr
+`// TODO: multi-patch storage — for now always load the hardcoded init
+voice`-Kommentar war seit Phase B sachlich falsch (es gibt längst 32
+echte Presets, nur eben über den anderen Pfad). Beide Methoden ersatzlos
+gelöscht (`RDX_Synth.h`). `ctl_.wantProgram`/`wantBankMSB`/`wantBankLSB`/
+`getWantBank()` in `RDX_Types.h` bleiben unangetastet (bewusst außerhalb
+des Umfangs — `wantBankMSB`/`wantBankLSB` werden weiterhin von den
+echten, aktiven CC0/32-Handlern beschrieben, passend zum bereits an
+anderer Stelle etablierten Muster „empfangen und gespeichert, aber nicht
+verbraucht", z. B. Tempo/LCD-Kontrast/Pedal-Modell im SYSTEM-Block).
+
+### FX1/FX2-Anzeige: effekt-spezifische Labels statt generischem „Param1"
+
+Die Frontpanel-Seiten zeigten bisher unabhängig vom Effekttyp immer
+„Param1: %d". Gegen jedes `fx_*.h`s `processBlock()` geprüft, was das
+Param1-Byte (`effects[slot][1]`, das einzige, das die Encoder tatsächlich
+schreiben — Param2 bleibt SysEx-only) pro Typ bedeutet: Distortion=Drive,
+Touch Wah=Sens, Chorus/Flanger/Phaser/Reverb=Depth, Delay=Feedback; Thru
+hat gar keine Parameter.
+
+- **`DX_FXHost.h`:** neues `FX_PARAM1_LABELS[FX_COUNT]`-Array, indiziert
+  wie `FX_NAMES[]`.
+- **`DX_GUI::dxDrawScreen()`:** FX1/FX2-Zweig nutzt jetzt
+  `"%s: %d"` mit `FX_PARAM1_LABELS[typeId]` statt der generischen
+  Beschriftung; bei Thru wird die zweite Zeile komplett weggelassen
+  (kein Parameter vorhanden, keine leere/irreführende Zeile).
+- Werte bleiben bewusst roh (0–127), konsistent mit allen anderen Seiten
+  (OP1-4 zeigen ebenfalls rohe Werte für Freq/Level, keine Umrechnung).
+  Eine ursprünglich in Phase C notierte Idee „Delay-Zeit in Millisekunden
+  anzeigen" erledigt sich damit von selbst: die Zeit ist Param2 (Delay/
+  Reverb), das ohnehin SysEx-only bleibt und am Frontpanel nie angezeigt
+  wird — Param1 bei Delay ist Feedback, ein einfacher Rohwert ohne
+  Einheit passt hier tatsächlich am besten.
+
+### Build-Verifikation
+
+Vollständiger Rebuild: **null Warnungen**. FLASH 163.864 B / 16 MB ≈
+0,98 %, RAM 273.912 B / 512 KB ≈ 52,24 % (minimale Änderung: −168 B
+Flash durch die gelöschten Methoden, +272 B durch das neue Label-Array
+und die GUI-Anpassung, macht netto +104 B).
+
+### STATUS JETZT
+
+Beide in der Nutzerfrage aufgeworfenen Restpunkte sind erledigt. Der
+100 %-Clone-Plan (A–D) bleibt vollständig abgeschlossen; einzig
+verbleibender, nicht selbst schließbarer Punkt ist weiterhin der
+CPU-Lasttest auf echter Hardware (Messinstrumentierung seit Phase D
+vorhanden, siehe §16). Die 3-Encoder-Bedienoberfläche (vs. die ~20
+direkten Knobs der echten reface DX) bleibt eine bewusste, seit
+Projektbeginn feststehende Hardware-Entscheidung, kein Firmware-Gap.

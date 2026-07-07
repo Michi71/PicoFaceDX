@@ -174,19 +174,6 @@ public:
     // offset applied uniformly to all operators alongside pitch bend.
     inline void setMasterTune(float semitones) { ctl_.tuningSemitones = semitones; }
 
-    void programChange(uint8_t ch, uint8_t program) {
-        if (ch >= 16) return;
-        ctl_.wantProgram = program & 0x7F;
-        applyBankProgram(ch);
-    }
-
-    inline void applyBankProgram(uint8_t ch) {
-        voiceAlloc_.clearStack();
-        // TODO: multi-patch storage — for now always load the hardcoded init voice
-        RDX_Patch patch = DigiChordPatch();
-        applyPatch(patch);
-    }
-
     void calcOutputGain() {
         if (!RDX_State::isInitialized()) { return; }
         polyMixCoeff_ = 0.8f / sqrtf((float)MAX_VOICES);

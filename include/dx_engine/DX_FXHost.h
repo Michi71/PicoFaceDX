@@ -46,6 +46,13 @@ static const char* const FX_NAMES[FX_COUNT] = {
     "Thru", "Distort", "T.Wah", "Chorus", "Flanger", "Phaser", "Delay", "Reverb"
 };
 
+// Label for the front-panel-editable Param1 value, indexed by FX_ID (confirmed
+// against each fx_*.h's processBlock()). FX_THRU has no parameters, so index 0
+// is unused and never displayed.
+static const char* const FX_PARAM1_LABELS[FX_COUNT] = {
+    "", "Drive", "Sens", "Depth", "Depth", "Depth", "Feedback", "Depth"
+};
+
 class DX_FXHost {
 public:
     void init(float sampleRate) {

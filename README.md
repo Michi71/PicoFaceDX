@@ -207,7 +207,7 @@ The front panel uses 3 rotary encoders. The home screen **is** the DX page view 
 
 Effect Param2 (e.g. TONE for Distortion, RATE for Chorus/Flanger/Phaser, TIME for Delay/Reverb) is SysEx-only, matching how several other patch parameters (voice name, KSC curves) are already not reachable from the 3-encoder front panel.
 
-Every page shows its two live parameter values on the OLED (not just an "edit via encoders" placeholder) — OP1-4 show Freq/Level, LFO shows Speed/PMD, FX1/FX2 show Type/Param1, and ALGO renders the actual algorithm diagram.
+Every page shows its two live parameter values on the OLED (not just an "edit via encoders" placeholder) — OP1-4 show Freq/Level, LFO shows Speed/PMD, FX1/FX2 show the effect Type plus a per-type-labeled Param1 (e.g. "Drive" for Distortion, "Sens" for Touch Wah, "Depth" for Chorus/Flanger/Phaser/Reverb, "Feedback" for Delay — Thru has no parameters, so only its Type is shown), and ALGO renders the actual algorithm diagram.
 
 ### Menu (Selector long-press ≥ 500 ms)
 

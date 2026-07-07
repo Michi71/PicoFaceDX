@@ -203,8 +203,10 @@ void dxDrawScreen(u8g2_t* u8g2, DX_Controller& controller) {
         char buf[32];
         snprintf(buf, sizeof(buf), "Type: %s", FX_NAMES[typeId]);
         u8g2_DrawStr(u8g2, 4, 40, buf);
-        snprintf(buf, sizeof(buf), "Param1: %d", param1);
-        u8g2_DrawStr(u8g2, 4, 54, buf);
+        if (typeId != FX_THRU) {
+            snprintf(buf, sizeof(buf), "%s: %d", FX_PARAM1_LABELS[typeId], param1);
+            u8g2_DrawStr(u8g2, 4, 54, buf);
+        }
     } else if (controller.currentPage() == DxPage::OP1 || controller.currentPage() == DxPage::OP2 || controller.currentPage() == DxPage::OP3 || controller.currentPage() == DxPage::OP4) {
         int opIdx = static_cast<int>(controller.currentPage());
         char buf[32];

@@ -260,6 +260,7 @@ Full spec: `doc/PRESETS.md`.
 - Patch/SysEx-addressable only (matches the real hardware — no dedicated MIDI CC control exists for effects).
 - Front-panel access via the FX1/FX2 pages (Type + Param1); Param2 is SysEx-only.
 - RP2350 adaptation: the ESP32 original dynamically probed heap_caps/PSRAM for scratch buffers and throttled polyphony based on measured effect CPU time; this build uses one fixed static scratch buffer per slot instead (96 KB, sized for the largest single effect, `FxReverb`), and no throttling (this project already has a fixed `MAX_VOICES` budget).
+- Switching an effect slot's type only clears the scratch region the incoming effect actually needs (`FXBase::scratchFootprintFloats()`), not the full 96 KB buffer — found via a real on-hardware CPU-load measurement showing a 140% peak (buffer underrun) on every effect switch; see `doc/CHANGELOG_DX_ENGINE.md` §19. Switching into Delay or Reverb specifically can still cause one brief (<1 block) audio blip, since their delay lines are inherently close to the worst-case buffer size.
 
 ## Design notes
 
@@ -268,6 +269,7 @@ Full spec: `doc/PRESETS.md`.
 - **Single-precision float** throughout the audio path, including the effects chain.
 - **Virtual EEPROM flash-park IPC handshake** for safe multicore flash writes — same mechanism as before, only the persisted payload struct changed.
 - **CPU load instrumentation**: `DX_Synth_Bridge::fill_buffer()` times itself against its real-time budget (`time_us_32()`) and exposes current/peak percentages, readable from the System menu's "CPU Load" screen. This is measurement infrastructure, not a substitute for an actual on-hardware load test with all 8 voices and both effect slots active — that number can only be read by flashing real hardware.
+- **FPU flush-to-zero enabled at boot** (`pico_init()`, `src/pico_hw.cpp`): found via a real on-hardware load test showing hissing/jitter during fast note changes — the operator feedback low-pass filter (and other IIR state in the effects chain) decays into the subnormal float range on every voice release, and the Cortex-M33 FPU's software denormal path is far slower than normal, occasionally blowing the audio IRQ's time budget. Set via inline VMRS/VMSR assembly (the SDK's CMSIS core headers aren't reachable from this build's include path); see `doc/CHANGELOG_DX_ENGINE.md` §20.
 
 ## Acknowledgements
 

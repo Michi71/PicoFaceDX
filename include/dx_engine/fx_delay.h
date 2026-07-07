@@ -41,6 +41,8 @@ public:
         }
     }
 
+    inline uint32_t scratchFootprintFloats() const override { return MAX_DELAY * 2; }
+
     inline void processBlock(float* left, float* right, uint32_t frames) override {
         if (!prepared_) return;
         setFbParam( st.effects[slotId_][1] ) ;

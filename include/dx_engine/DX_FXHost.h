@@ -99,14 +99,17 @@ private:
     FxDelay      delay_[FX_SLOTS];
     FxReverb     reverb_[FX_SLOTS];
 
-    inline void resetSlot(uint8_t slot) {
-        memset(scratch_[slot], 0, sizeof(scratch_[slot]));
+    inline void resetSlot(uint8_t slot, FXBase* incoming) {
+        uint32_t n = incoming->scratchFootprintFloats();
+        if (n > FX_SCRATCH_FLOATS) n = FX_SCRATCH_FLOATS;
+        if (n > 0) memset(scratch_[slot], 0, n * sizeof(float));
     }
 
     inline void setSlot(uint8_t slot, FX_ID id) {
         if (slot >= FX_SLOTS || id >= FX_COUNT) return;
-        resetSlot(slot);
-        slots_[slot] = getInstance(id, slot);
+        FXBase* incoming = getInstance(id, slot);
+        resetSlot(slot, incoming);
+        slots_[slot] = incoming;
         slots_[slot]->enable(false);
         slots_[slot]->reset();
         slots_[slot]->enable(true);

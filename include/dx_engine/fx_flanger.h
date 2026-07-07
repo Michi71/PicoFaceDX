@@ -48,6 +48,8 @@ public:
         }
     }
 
+    inline uint32_t scratchFootprintFloats() const override { return (uint32_t)bufferSize_ * 2; }
+
     inline void processBlock(float* l, float* r, uint32_t n) override {
         if (!enabled_ || !prepared_) return;
 

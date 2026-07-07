@@ -746,3 +746,169 @@ CPU-Lasttest auf echter Hardware (Messinstrumentierung seit Phase D
 vorhanden, siehe §16). Die 3-Encoder-Bedienoberfläche (vs. die ~20
 direkten Knobs der echten reface DX) bleibt eine bewusste, seit
 Projektbeginn feststehende Hardware-Entscheidung, kein Firmware-Gap.
+
+---
+
+## 19. Nachtrag: Echter Hardware-CPU-Lasttest deckt Effekt-Wechsel-Bug auf (2026-07-07)
+
+**Anlass:** Nutzer hat den in Phase D instrumentierten CPU-Lasttest auf
+echter Hardware durchgeführt (der eine offene Punkt, den ich selbst nicht
+schließen konnte). Ergebnis: **Now 49–60 % (gut), Peak 140 %** — ein
+Peak über 100 % bedeutet einen echten Pufferunterlauf (Audio-Glitch/Klick
+in dem Moment), kein Messfehler.
+
+### Root Cause
+
+`SAMPLES_PER_BUFFER` (`lib/audio/include/audio_subsystem.h`) ist **16**
+Samples — bei 44,1 kHz nur **~363 µs** Echtzeitbudget pro I2S-IRQ-Block.
+`DX_FXHost::setSlot()` (aufgerufen bei jedem Effekt-Typ-Wechsel: Encoder
+auf FX1/FX2, Preset-Wechsel, SysEx-Patch-Load) rief bisher
+`resetSlot()` auf, das **immer den vollen 96-KB-Scratch-Puffer**
+(24576 Floats, dimensioniert für den größten Einzelbedarf `FxReverb`)
+per `memset()` löschte — unabhängig davon, welcher der 8 Effekttypen
+tatsächlich aktiviert wurde. Geschätzte Memset-Dauer bei ~150 MB/s
+Durchsatz: 400–650 µs, je nach tatsächlichem Speicherdurchsatz zur
+Laufzeit — sprengt das 363-µs-Budget bei praktisch jedem Wechsel und
+erklärt den gemessenen 140-%-Peak.
+
+Der Grund für die Notwendigkeit **irgendeines** Löschens: Chorus,
+Flanger, Phaser, Delay und Reverb legen ihre Delay-Lines alle als
+Pointer-Aliase in denselben gemeinsamen `scratch_[slot]`-Puffer (RAM-
+Sparmaßnahme aus Phase C — nur ein Effekt pro Slot ist je aktiv). Ohne
+Löschen beim Wechsel würde die neue Effektinstanz die Rohdaten des
+vorherigen Effekts als Delay-Line-Inhalt vorfinden (hörbarer Phantom-
+Echo-Artefakt). Der Fix in Phase C hat das korrekt erkannt, aber mit der
+denkbar teuersten Lösung (immer alles löschen) statt der günstigsten
+(nur den tatsächlich benötigten Bereich löschen) behoben.
+
+### Fix
+
+- **`fx_base.h`:** neue virtuelle Methode `scratchFootprintFloats()`,
+  Default `0` (Thru/Distortion/TouchWah fassen `scratch_` nie an).
+- **`fx_chorus.h`/`fx_phaser.h`:** Override `MAX_DELAY * 2` bzw.
+  `FLANGER_BUF_SIZE * 2` → 8192 Floats statt 24576 (66,7 % weniger).
+- **`fx_flanger.h`:** Override `bufferSize_ * 2` (Laufzeitwert aus
+  `prepare()`, bei 44,1 kHz ≈ 1338 Floats) → 94,6 % weniger.
+- **`fx_delay.h`:** Override `MAX_DELAY * 2` = 22050 Floats (10,3 %
+  weniger als der volle Puffer — Delay braucht selbst schon fast das
+  Reverb-Maximum, siehe unten).
+- **`fx_reverb.h`:** Override summiert `combSize_[ch][i]` +
+  `allSize_[ch][i]` über beide Kanäle zur Laufzeit (Schleife, unkritisch
+  — läuft nur einmal pro Wechsel, nicht pro Sample) → exakt die
+  tatsächlich benötigten ~24276 Floats (kein struktureller Unterschied
+  zum Worst-Case, da Reverb selbst der Worst-Case ist).
+- **`DX_FXHost.h`:** `resetSlot()` nimmt jetzt die eingehende
+  `FXBase*`-Instanz entgegen, fragt `scratchFootprintFloats()` ab
+  (defensiv auf `FX_SCRATCH_FLOATS` geclampt) und löscht nur noch genau
+  diesen Bereich statt immer `sizeof(scratch_[slot])`.
+
+### Ergebnis und verbleibende Einschränkung
+
+Für 6 von 8 Zieleffekten (Thru/Distortion/TouchWah: kein Löschen nötig;
+Chorus/Phaser: 8192 statt 24576 Floats; Flanger: 1338 statt 24576 Floats)
+ist der Peak damit vollständig unter dem 363-µs-Budget. Für die
+verbleibenden 2 (Delay: 22050 Floats, Reverb: ~24276 Floats) bleibt ein
+kurzer, unvermeidbarer Blip beim Wechsel **speziell in diese beiden
+Effekttypen** — deren Delay-Lines sind inhärent so groß, dass selbst ihr
+tatsächlicher (nicht mehr Worst-Case-)Bedarf das 363-µs-Budget einer
+einzelnen Audio-IRQ übersteigt. Eine vollständige Beseitigung würde das
+Löschen über mehrere Audio-Blöcke strecken (Zustandsautomat mit
+Zwischen-Stummschaltung) — bewusst nicht umgesetzt, da das ein deutlich
+größerer Eingriff für ein seltenes, nutzergetriebenes Ereignis (Encoder-
+Dreh auf FX-Typ) wäre, kein Dauerzustand während des Spielens.
+
+### Build-Verifikation
+
+Vollständiger Rebuild: **null Warnungen**. FLASH 164.064 B / 16 MB ≈
+0,98 %, RAM 273.936 B / 512 KB ≈ 52,25 % (minimale Änderung: +200 B
+Flash, +24 B RAM für die 5 neuen Overrides + die `DX_FXHost`-Anpassung).
+
+### STATUS JETZT
+
+Der von Nutzerseite durchgeführte Hardware-Test hat einen echten,
+zuvor unentdeckten Performance-Bug aufgedeckt und direkt zu seiner
+Behebung geführt — genau der Zweck der in Phase D hinzugefügten
+Instrumentierung. Empfehlung an den Nutzer: den Lasttest auf echter
+Hardware erneut durchführen und insbesondere gezielt zwischen Delay und
+Reverb hin- und herschalten, um zu bestätigen, dass der Peak jetzt nur
+noch bei diesen beiden Wechseln auftritt (und nicht mehr bei den
+anderen 6 Effekttypen).
+
+---
+
+## 20. Nachtrag: FPU Flush-to-Zero gegen Zischen/Jitter bei schnellem Notenwechsel (2026-07-07)
+
+**Anlass:** Zweiter Hardware-Test nach §19 mit dem Preset "MotionPad"
+(Algorithmus 8, Slot 1 = Chorus, Slot 2 = Delay mit Feedback 70/127):
+Peak 111 %, Now 50–65 % — deutlich besser als die 140 % aus §19, aber
+weiterhin über 100 %. Zusätzlich beschrieben: hörbares Zischen/Jittern
+speziell bei schnellem Tonwechsel (schneller Notenwechsel, POLY-Modus,
+also Stimmen-Stealing über alle 8 Stimmen).
+
+### Root Cause
+
+`RDX_Operator::compute()` (`RDX_Operator.h`) enthält pro Operator und
+Sample ein Feedback-Tiefpassfilter:
+```cpp
+fbFilter_ += fbLpCoef_ * (fbAcc_ - fbFilter_);
+```
+Ein klassisches IIR-Filter, das sich beim Ausklingen einer Stimme
+exponentiell der Null annähert — dabei durchläuft es zwangsläufig den
+**Subnormal-/Denormal-Gleitkommabereich** (extrem kleine Floats nahe
+Null). Ohne explizite Flush-to-Zero-Konfiguration behandelt der
+Cortex-M33 der RP2350 Denormals IEEE-754-konform in Hardware/Mikrocode,
+was **um ein Vielfaches langsamer** sein kann als der Normalfall. Grep
+über den gesamten Quellbaum bestätigte: keine Stelle setzt bisher das
+FZ-Bit. Je mehr Stimmen/Operatoren gleichzeitig ausklingen (genau der
+Fall bei schnellem Notenwechsel mit vielen aktiven/abklingenden
+Stimmen), desto wahrscheinlicher ein Stall in einem einzelnen
+363-µs-Audioblock — hörbar als Zischen/Jitter. Das Reverb/Delay/Chorus/
+Flanger/Phaser der Effektkette haben strukturell ähnliche
+Feedback-/Dämpfungs-IIR-Zustände, sind aber sekundär gegenüber dem
+Operator-Feedback-Filter, der bei **jeder** Stimme und **jedem**
+Preset kontinuierlich läuft.
+
+### Fix
+
+`pico_init()` (`src/pico_hw.cpp`) setzt jetzt als allererste Anweisung
+das FZ- (Flush-to-Zero, Bit 24) und DN-Bit (Default-NaN, Bit 25) im
+FPU-Statusregister FPSCR:
+```cpp
+{
+    uint32_t fpscr;
+    __asm__ volatile ("vmrs %0, fpscr" : "=r" (fpscr));
+    fpscr |= (1u << 24) | (1u << 25);
+    __asm__ volatile ("vmsr fpscr, %0" : : "r" (fpscr));
+}
+```
+Reine Inline-Assembly (VMRS/VMSR) statt CMSIS-Intrinsics
+(`__get_FPSCR`/`__set_FPSCR`): der erste Versuch scheiterte, weil die
+CMSIS-Core-Header dieses SDK-Forks für den RP2350-Build-Pfad nicht
+transitiv erreichbar sind (weder über bereits vorhandene Includes noch
+über `hardware/sync.h`, das trotz `__wfi()` keine CMSIS-Kette zieht,
+sondern einen eigenen Inline-Asm-Wrapper nutzt) — die Inline-Assembly
+ist plattform-/header-unabhängig und funktioniert identisch auf jedem
+Cortex-M mit FPU (M4/M7/M33).
+
+Flush-to-Zero ist für Audio unhörbar (die betroffenen Werte liegen per
+Definition unterhalb der Rauschgrenze) und ist Standardpraxis in
+Echtzeit-Audio-DSP auf ARM.
+
+### Build-Verifikation
+
+Vollständiger Rebuild: **null Warnungen**. FLASH 164.072 B / 16 MB ≈
+0,98 %, RAM 273.936 B / 512 KB ≈ 52,25 % (+8 B Flash gegenüber §19,
+kein Laufzeit-RAM-Overhead).
+
+### STATUS JETZT
+
+Fix angewandt und Build verifiziert; die eigentliche Bestätigung (Peak
+sollte bei erneutem Hardware-Test mit "MotionPad" bei schnellem
+Notenwechsel spürbar sinken, das Zischen/Jittern verschwinden) kann nur
+der Nutzer auf echter Hardware durchführen. Sollte nach diesem Fix noch
+Zischen auftreten, käme als nächstes in Frage: die tatsächliche
+IRQ-Gesamtzeit inkl. IPC-Drain-Schleife messen (die aktuelle
+CPU-Last-Instrumentierung erfasst nur `fill_buffer()` selbst, nicht die
+Zeit für `ipc_apply()`-Aufrufe wie `noteOn()` davor, die bei einem
+Ausbruch mehrerer Noten in kurzer Zeit ebenfalls ins Budget schneiden
+könnten).

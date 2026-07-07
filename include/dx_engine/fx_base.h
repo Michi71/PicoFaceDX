@@ -24,6 +24,13 @@ public:
         (void)sampleRate;
         return true;
     }
+    // Number of floats this effect actually needs from the shared per-slot
+    // scratch buffer (see DX_FXHost::scratch_). Default 0 = doesn't touch it
+    // (Thru/Distortion/TouchWah). Effects that alias scratch for delay lines
+    // (Chorus/Flanger/Phaser/Delay/Reverb) override this so DX_FXHost only
+    // clears the region they actually use on a slot switch, instead of the
+    // full worst-case buffer every time.
+    virtual uint32_t scratchFootprintFloats() const { return 0; }
     inline void enable(bool s) { enabled_ = s; }
     inline bool enabled() const { return enabled_; }
 

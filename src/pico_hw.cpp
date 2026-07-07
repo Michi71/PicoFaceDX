@@ -61,6 +61,22 @@ uint8_t u8x8_gpio_and_delay_pico(u8x8_t *u8x8, uint8_t msg,uint8_t arg_int, void
 
 void pico_init()
 {
+    // Enable FPU flush-to-zero (FZ) + default-NaN (DN) mode. Without this,
+    // any continuously-decaying IIR state in the audio path (operator
+    // feedback low-pass in RDX_Operator::compute(), reverb/delay/chorus
+    // feedback loops) eventually settles into the subnormal float range,
+    // where the Cortex-M33 FPU falls back to a much slower software path --
+    // audible as intermittent hissing/jitter, worse the more voices are
+    // simultaneously decaying (e.g. fast note changes). Flushing denormals
+    // to zero is inaudible (values are already below the noise floor) and
+    // is standard practice for real-time audio DSP.
+    {
+        uint32_t fpscr;
+        __asm__ volatile ("vmrs %0, fpscr" : "=r" (fpscr));
+        fpscr |= (1u << 24) | (1u << 25);
+        __asm__ volatile ("vmsr fpscr, %0" : : "r" (fpscr));
+    }
+
 #if PICO_RP2350
     volatile uint32_t *qmi_m0_timing=(uint32_t *)0x400d000c;
     vreg_disable_voltage_limit();

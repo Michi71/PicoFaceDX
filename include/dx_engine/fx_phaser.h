@@ -42,6 +42,8 @@ public:
         resetFlanger();
     }
 
+    inline uint32_t scratchFootprintFloats() const override { return FLANGER_BUF_SIZE * 2; }
+
     inline void setDepth(uint8_t d) {
         if (d == lastDepth_) return;
         lastDepth_ = d;

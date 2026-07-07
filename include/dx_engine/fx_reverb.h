@@ -54,6 +54,15 @@ public:
         prev_out = 0.0f;
     }
 
+    inline uint32_t scratchFootprintFloats() const override {
+        uint32_t total = 0;
+        for (int ch = 0; ch < 2; ++ch) {
+            for (int i = 0; i < NUM_COMBS; ++i) total += (uint32_t)combSize_[ch][i];
+            for (int i = 0; i < NUM_ALLPASSES; ++i) total += (uint32_t)allSize_[ch][i];
+        }
+        return total;
+    }
+
     inline void processBlock(float* L, float* R, uint32_t n) override {
         if (!prepared_) return;
         float depth = st.effects[slotId_][1] / 127.0f * 0.2f;
